@@ -7,7 +7,7 @@
 ## Next up
 - [x] Create docs/schema.json
 - [x] Create docs/conversation_scripts.md
-- [ ] Backend skeleton (FastAPI, /health endpoint)
+- [x] Backend skeleton (FastAPI, /health endpoint)
 - [ ] Conversation engine (/chat endpoint using Ollama)
 - [ ] Frontend chat UI
 - [ ] Doctor dashboard (fake data first)
