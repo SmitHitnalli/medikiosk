@@ -6,11 +6,11 @@
 - [x] Backend skeleton (FastAPI, /health endpoint)
 - [x] Conversation engine (/chat endpoint using Ollama)
 - [x] Red-flag alert feature
+- [x] Frontend chat UI
 
 ## Next up
 - [x] Create docs/schema.json
 - [x] Create docs/conversation_scripts.md
-- [ ] Frontend chat UI
 - [ ] Doctor dashboard (fake data first)
 - [ ] Connect dashboard to real data
 - [ ] Speech-to-text (/transcribe endpoint)
