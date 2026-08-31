@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
+import { playAudioBlob, stopAllAudio } from "./audio";
 
 const SPEAK_ENDPOINT = "http://localhost:8080/speak";
 const CONSENT_PROMPTS = {
@@ -10,28 +11,36 @@ const CONSENT_PROMPTS = {
 function ConsentScreen({ language, onAgree, onDecline, onClearData }) {
   const [promptStatus, setPromptStatus] = useState("Playing the consent explanation...");
   const prompt = CONSENT_PROMPTS[language] || CONSENT_PROMPTS.en;
+  const playedPromptRef = useRef("");
 
   useEffect(() => {
+    const promptKey = language || "en";
+    if (playedPromptRef.current === promptKey) return undefined;
     let cancelled = false;
+    const controller = new AbortController();
     async function speakConsent() {
       try {
         const response = await fetch(SPEAK_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: prompt, language: language || "en" }),
+          signal: controller.signal,
         });
         if (!response.ok) throw new Error("Consent prompt unavailable");
-        const audioUrl = URL.createObjectURL(await response.blob());
-        const audio = new Audio(audioUrl);
-        audio.onended = () => URL.revokeObjectURL(audioUrl);
-        await audio.play();
+        await playAudioBlob(await response.blob());
+        playedPromptRef.current = promptKey;
         if (!cancelled) setPromptStatus("Please choose whether you agree to continue.");
-      } catch {
+      } catch (error) {
+        if (error.name === "AbortError" || error.message === "Audio playback stopped.") return;
         if (!cancelled) setPromptStatus("Please read the explanation and choose whether you agree to continue.");
       }
     }
     void speakConsent();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      controller.abort();
+      stopAllAudio();
+    };
   }, [language, prompt]);
 
   return (

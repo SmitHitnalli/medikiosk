@@ -3,6 +3,7 @@ import ClearDataButton from "./ClearDataButton";
 import ConsentScreen from "./ConsentScreen";
 import DoctorDashboard from "./DoctorDashboard";
 import LanguageSelection from "./LanguageSelection";
+import { stopAllAudio } from "./audio";
 
 const CHAT_ENDPOINT = "http://localhost:8080/chat";
 const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
@@ -134,6 +135,7 @@ function App() {
 
   useEffect(() => {
     const handleHashChange = () => {
+      stopAllAudio();
       const hash = window.location.hash;
       setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#consent" ? "consent" : hash === "#mode" ? "mode" : hash === "#chat" ? "chat" : "idle");
     };
@@ -142,6 +144,7 @@ function App() {
   }, []);
 
   function navigate(nextPage) {
+    stopAllAudio();
     window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "consent" ? "consent" : nextPage === "mode" ? "mode" : nextPage === "chat" ? "chat" : "";
     setPage(nextPage);
   }

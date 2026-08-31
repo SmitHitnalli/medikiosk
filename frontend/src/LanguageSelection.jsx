@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { playAudioBlob, stopAllAudio } from "./audio";
 
 const SPEAK_ENDPOINT = "http://localhost:8080/speak";
 const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
@@ -13,17 +14,6 @@ async function requestSpeech(text) {
   });
   if (!response.ok) throw new Error("Unable to play the language prompt.");
   return response.blob();
-}
-
-function playAudioBlob(blob) {
-  return new Promise((resolve, reject) => {
-    const audioUrl = URL.createObjectURL(blob);
-    const audio = new Audio(audioUrl);
-    const cleanUp = () => URL.revokeObjectURL(audioUrl);
-    audio.onended = () => { cleanUp(); resolve(); };
-    audio.onerror = () => { cleanUp(); reject(new Error("The language prompt could not be played.")); };
-    audio.play().catch((error) => { cleanUp(); reject(error); });
-  });
 }
 
 function playHindiPlaceholder(text) {
@@ -54,6 +44,7 @@ function LanguageSelection({ onSelect, onBack }) {
       } catch {
         if (!cancelled) setPromptStatus("Choose a language below; the spoken English prompt was unavailable.");
       }
+      if (cancelled) return;
       try {
         const hindiAudio = await requestSpeech(HINDI_PROMPT);
         if (!cancelled) {
@@ -71,6 +62,7 @@ function LanguageSelection({ onSelect, onBack }) {
     void playPrompts();
     return () => {
       cancelled = true;
+      stopAllAudio();
       window.speechSynthesis?.cancel();
     };
   }, []);

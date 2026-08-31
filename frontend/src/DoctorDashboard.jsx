@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
+import { playAudioBlob, stopAllAudio } from "./audio";
 
 const samplePatient = {
   chief_complaint: "Chest discomfort, worse on exertion",
@@ -96,18 +97,15 @@ function DoctorDashboard({ patientData, onBack, onClearData }) {
         const result = await response.json();
         throw new Error(result.detail || "The summary could not be spoken.");
       }
-      const audio = new Audio(URL.createObjectURL(await response.blob()));
-      audio.onended = () => setIsSpeaking(false);
-      audio.onerror = () => {
-        setIsSpeaking(false);
-        setSpeechError("The audio could not be played.");
-      };
-      await audio.play();
+      await playAudioBlob(await response.blob());
+      setIsSpeaking(false);
     } catch (error) {
       setIsSpeaking(false);
       setSpeechError(error.message || "Unable to play the summary.");
     }
   }
+
+  useEffect(() => () => stopAllAudio(), []);
 
   return (
     <main className="dashboard-shell">
