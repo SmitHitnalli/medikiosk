@@ -16,7 +16,7 @@
 - [x] Text-to-speech endpoint (/speak)
 - [x] OCR endpoint
 - [x] Language selection (spoken EN/HI prompt + manual buttons)
-- [x] Consent screen with persistent cancel/clear-data option
+- [x] Consent screen with persistent cancel/clear-data option and localized Hindi audio fallback
 - [x] Language selection, mode, and consent screen audio lifecycle and single-playback behavior
 
 ## Next up (v2 feature plan)
@@ -39,4 +39,4 @@
 - [ ] Backup demo video
 
 ## Known gaps
-- Hindi Piper voice not yet downloaded - Hindi prompts currently use browser speech synthesis.
+- All Hindi audio currently uses browser speechSynthesis as a workaround; a real Hindi Piper voice should be downloaded and integrated during the voice polish step.

@@ -8,6 +8,17 @@ const CONSENT_PROMPTS = {
   hi: "हम आपसे आपके स्वास्थ्य के बारे में कुछ सवाल पूछेंगे और आपके द्वारा साझा किए गए दस्तावेज़ देख सकते हैं। यह केवल आपके डॉक्टर को आपकी मुलाकात को बेहतर समझने में मदद करने के लिए है। क्या आप आगे बढ़ने के लिए सहमत हैं?",
 };
 
+function playHindiPlaceholder(text) {
+  if (!window.speechSynthesis) return Promise.reject(new Error("Hindi voice fallback is unavailable."));
+  return new Promise((resolve) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "hi-IN";
+    utterance.onend = resolve;
+    utterance.onerror = resolve;
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
 function ConsentScreen({ language, interactionMode, onAgree, onDecline, onClearData }) {
   const isSpeakMode = interactionMode === "speak";
   const [promptStatus, setPromptStatus] = useState(isSpeakMode ? "Playing the consent explanation..." : "Please read the explanation and choose whether you agree to continue.");
@@ -32,7 +43,16 @@ function ConsentScreen({ language, interactionMode, onAgree, onDecline, onClearD
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("Consent prompt unavailable");
-        await playAudioBlob(await response.blob());
+        const audioBlob = await response.blob();
+        if (language === "hi") {
+          try {
+            await playHindiPlaceholder(prompt);
+          } catch {
+            await playAudioBlob(audioBlob);
+          }
+        } else {
+          await playAudioBlob(audioBlob);
+        }
         playedPromptRef.current = promptKey;
         if (!cancelled) setPromptStatus("Please choose whether you agree to continue.");
       } catch (error) {
