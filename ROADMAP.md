@@ -11,7 +11,7 @@
 - [x] Connect dashboard to real data
 - [x] Robust Ollama JSON parsing and retry
 - [x] Dashboard safely handles mismatched AI data types
-- [x] Speech-to-text (/transcribe endpoint)
+- [x] Speech-to-text endpoint (/transcribe)
 - [x] CPU-only faster-whisper configuration
 
 ## Next up
