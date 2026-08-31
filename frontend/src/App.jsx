@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import ClearDataButton from "./ClearDataButton";
+import ConsentScreen from "./ConsentScreen";
 import DoctorDashboard from "./DoctorDashboard";
 import LanguageSelection from "./LanguageSelection";
 
@@ -37,7 +39,7 @@ function StartScreen({ onStart }) {
   );
 }
 
-function ModePlaceholder({ language, onContinue, onBack }) {
+function ModePlaceholder({ language, onContinue, onBack, onClearData }) {
   return (
     <main className="start-shell">
       <section className="start-card language-card" aria-label="Mode selection placeholder">
@@ -46,6 +48,7 @@ function ModePlaceholder({ language, onContinue, onBack }) {
         <h1>Choose your interview mode</h1>
         <p className="start-copy">Mode selection will be available here. Continue with chat for this demo ({language === "hi" ? "Hindi" : "English"}).</p>
         <button className="start-button" type="button" onClick={onContinue}>Continue to chat</button>
+        <ClearDataButton onClearData={onClearData} />
         <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
       </section>
     </main>
@@ -57,12 +60,14 @@ function App() {
     if (window.location.hash === "#dashboard") return "dashboard";
     if (window.location.hash === "#chat") return "chat";
     if (window.location.hash === "#language") return "language";
+    if (window.location.hash === "#consent") return "consent";
     if (window.location.hash === "#mode") return "mode";
     return "idle";
   });
   const [interviewData, setInterviewData] = useState(null);
   const [interviewComplete, setInterviewComplete] = useState(false);
   const [language, setLanguage] = useState(null);
+  const [clearConfirmation, setClearConfirmation] = useState("");
   const [mode, setMode] = useState("general");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([
@@ -120,23 +125,36 @@ function App() {
     setIsOcrUploading(false);
   }, []);
 
+  function returnToStart(showConfirmation = false) {
+    clearSession();
+    if (showConfirmation) setClearConfirmation("Your data has been cleared");
+    window.location.hash = "";
+    setPage("idle");
+  }
+
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash;
-      setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#mode" ? "mode" : hash === "#chat" ? "chat" : "idle");
+      setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#consent" ? "consent" : hash === "#mode" ? "mode" : hash === "#chat" ? "chat" : "idle");
     };
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
 
   function navigate(nextPage) {
-    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "mode" ? "mode" : nextPage === "chat" ? "chat" : "";
+    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "consent" ? "consent" : nextPage === "mode" ? "mode" : nextPage === "chat" ? "chat" : "";
     setPage(nextPage);
   }
 
   useEffect(() => {
     if (page === "idle") clearSession();
   }, [page, clearSession]);
+
+  useEffect(() => {
+    if (!clearConfirmation) return undefined;
+    const timeoutId = window.setTimeout(() => setClearConfirmation(""), 3000);
+    return () => window.clearTimeout(timeoutId);
+  }, [clearConfirmation]);
 
   useEffect(() => {
     if (page === "idle") return undefined;
@@ -342,16 +360,19 @@ function App() {
   }
 
   if (page === "dashboard") {
-    return <DoctorDashboard patientData={interviewData} onBack={() => navigate("chat")} />;
+    return <DoctorDashboard patientData={interviewData} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} />;
   }
   if (page === "idle") {
-    return <StartScreen onStart={() => { clearSession(); navigate("language"); }} />;
+    return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
   }
   if (page === "language") {
-    return <LanguageSelection onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("mode"); }} onBack={() => navigate("idle")} />;
+    return <LanguageSelection onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("consent"); }} onBack={() => navigate("idle")} />;
+  }
+  if (page === "consent") {
+    return <ConsentScreen language={language} onAgree={() => navigate("mode")} onDecline={() => returnToStart(false)} onClearData={() => returnToStart(true)} />;
   }
   if (page === "mode") {
-    return <ModePlaceholder language={language} onContinue={() => navigate("chat")} onBack={() => navigate("language")} />;
+    return <ModePlaceholder language={language} onContinue={() => navigate("chat")} onBack={() => navigate("language")} onClearData={() => returnToStart(true)} />;
   }
 
   return (
@@ -364,6 +385,7 @@ function App() {
             <p className="subtitle">A structured history for your physician to review.</p>
           </div>
           <div className="header-actions">
+            <ClearDataButton onClearData={() => returnToStart(true)} />
             <a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>{interviewData ? "View live summary →" : "Doctor dashboard →"}</a>
             <div className="mode-control">
               <span className="mode-label">{mode === "general" ? "General mode" : "AYUSH mode"}</span>

@@ -1,0 +1,55 @@
+import { useEffect, useState } from "react";
+import ClearDataButton from "./ClearDataButton";
+
+const SPEAK_ENDPOINT = "http://localhost:8080/speak";
+const CONSENT_PROMPTS = {
+  en: "We will ask you some questions about your health and may look at any documents you share. This is only to help your doctor understand your visit better. Do you agree to continue?",
+  hi: "हम आपसे आपके स्वास्थ्य के बारे में कुछ सवाल पूछेंगे और आपके द्वारा साझा किए गए दस्तावेज़ देख सकते हैं। यह केवल आपके डॉक्टर को आपकी मुलाकात को बेहतर समझने में मदद करने के लिए है। क्या आप आगे बढ़ने के लिए सहमत हैं?",
+};
+
+function ConsentScreen({ language, onAgree, onDecline, onClearData }) {
+  const [promptStatus, setPromptStatus] = useState("Playing the consent explanation...");
+  const prompt = CONSENT_PROMPTS[language] || CONSENT_PROMPTS.en;
+
+  useEffect(() => {
+    let cancelled = false;
+    async function speakConsent() {
+      try {
+        const response = await fetch(SPEAK_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: prompt, language: language || "en" }),
+        });
+        if (!response.ok) throw new Error("Consent prompt unavailable");
+        const audioUrl = URL.createObjectURL(await response.blob());
+        const audio = new Audio(audioUrl);
+        audio.onended = () => URL.revokeObjectURL(audioUrl);
+        await audio.play();
+        if (!cancelled) setPromptStatus("Please choose whether you agree to continue.");
+      } catch {
+        if (!cancelled) setPromptStatus("Please read the explanation and choose whether you agree to continue.");
+      }
+    }
+    void speakConsent();
+    return () => { cancelled = true; };
+  }, [language, prompt]);
+
+  return (
+    <main className="start-shell">
+      <section className="start-card consent-card" aria-label="Consent screen">
+        <div className="brand-mark small" aria-hidden="true">M</div>
+        <p className="start-eyebrow">MediKiosk · Consent</p>
+        <h1>Before we begin</h1>
+        <p className="consent-copy">{prompt}</p>
+        <p className="prompt-status">{promptStatus}</p>
+        <div className="consent-actions">
+          <button className="start-button" type="button" onClick={onAgree}>I agree, continue</button>
+          <button className="decline-button" type="button" onClick={onDecline}>I do not agree</button>
+        </div>
+        <ClearDataButton onClearData={onClearData} />
+      </section>
+    </main>
+  );
+}
+
+export default ConsentScreen;
