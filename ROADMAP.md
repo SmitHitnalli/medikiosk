@@ -17,7 +17,7 @@
 - [x] OCR endpoint
 
 ## Next up (v2 feature plan)
-- [ ] Start button / idle screen with session clearing and idle timeout
+- [x] Start button / idle screen with session clearing and idle timeout
 - [ ] Language selection (spoken EN/HI prompt + manual buttons)
 - [ ] Consent screen with persistent cancel/clear-data option
 - [ ] Mode selection (hands-free vs chat)

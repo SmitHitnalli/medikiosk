@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import DoctorDashboard from "./DoctorDashboard";
 
 const CHAT_ENDPOINT = "http://localhost:8080/chat";
 const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
 const OCR_ENDPOINT = "http://localhost:8080/ocr";
+const IDLE_TIMEOUT_MS = 90 * 1000;
 
 function asItems(value) {
   if (Array.isArray(value)) return value.filter((item) => item != null && String(item).trim());
@@ -20,8 +21,43 @@ function formatLabValue(value) {
   return `${name}: ${reading}${range}${flag}`;
 }
 
+function StartScreen({ onStart }) {
+  return (
+    <main className="start-shell">
+      <section className="start-card" aria-label="MediKiosk welcome screen">
+        <div className="brand-mark" aria-hidden="true">M</div>
+        <p className="start-eyebrow">MediKiosk</p>
+        <h1>Patient history, made simple.</h1>
+        <p className="start-copy">A guided conversation to help your physician understand how you are feeling.</p>
+        <button className="start-button" type="button" onClick={onStart}>Start</button>
+        <p className="start-note">Tap Start when you are ready.</p>
+      </section>
+    </main>
+  );
+}
+
+function LanguagePlaceholder({ onContinue, onBack }) {
+  return (
+    <main className="start-shell">
+      <section className="start-card language-card" aria-label="Language selection placeholder">
+        <div className="brand-mark small" aria-hidden="true">M</div>
+        <p className="start-eyebrow">MediKiosk</p>
+        <h1>Choose your language</h1>
+        <p className="start-copy">Language selection will be available here. Continue with English for this demo.</p>
+        <button className="start-button" type="button" onClick={onContinue}>Continue in English</button>
+        <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
+      </section>
+    </main>
+  );
+}
+
 function App() {
-  const [page, setPage] = useState(() => window.location.hash === "#dashboard" ? "dashboard" : "chat");
+  const [page, setPage] = useState(() => {
+    if (window.location.hash === "#dashboard") return "dashboard";
+    if (window.location.hash === "#chat") return "chat";
+    if (window.location.hash === "#language") return "language";
+    return "idle";
+  });
   const [interviewData, setInterviewData] = useState(null);
   const [interviewComplete, setInterviewComplete] = useState(false);
   const [mode, setMode] = useState("general");
@@ -49,16 +85,74 @@ function App() {
   const silenceAnimationRef = useRef(null);
   const documentInputRef = useRef(null);
 
+  const clearSession = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.onstop = null;
+      recorder.stop();
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (silenceAnimationRef.current) cancelAnimationFrame(silenceAnimationRef.current);
+    if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
+    mediaRecorderRef.current = null;
+    audioChunksRef.current = [];
+    audioContextRef.current = null;
+    analyserRef.current = null;
+    silenceStartedAtRef.current = null;
+    recordingStartedAtRef.current = null;
+    setMessages([{ role: "assistant", content: "Hello. I’m here to understand what brings you in today." }]);
+    setInterviewData(null);
+    setInterviewComplete(false);
+    setMode("general");
+    setMessage("");
+    setRedFlagReason("");
+    setOcrResult(null);
+    setError("");
+    setIsSending(false);
+    setIsRecording(false);
+    setIsOcrUploading(false);
+  }, []);
+
   useEffect(() => {
-    const handleHashChange = () => setPage(window.location.hash === "#dashboard" ? "dashboard" : "chat");
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#chat" ? "chat" : "idle");
+    };
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
 
   function navigate(nextPage) {
-    window.location.hash = nextPage === "dashboard" ? "dashboard" : "";
+    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "chat" ? "chat" : "";
     setPage(nextPage);
   }
+
+  useEffect(() => {
+    if (page === "idle") clearSession();
+  }, [page, clearSession]);
+
+  useEffect(() => {
+    if (page === "idle") return undefined;
+    let timeoutId;
+    const resetIdleTimeout = () => {
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(() => {
+        clearSession();
+        window.location.hash = "";
+        setPage("idle");
+      }, IDLE_TIMEOUT_MS);
+    };
+    const activityEvents = ["pointerdown", "keydown", "touchstart"];
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, resetIdleTimeout));
+    resetIdleTimeout();
+    return () => {
+      window.clearTimeout(timeoutId);
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, resetIdleTimeout));
+    };
+  }, [page, clearSession]);
 
   useEffect(() => {
     const list = messageListRef.current;
@@ -244,6 +338,12 @@ function App() {
 
   if (page === "dashboard") {
     return <DoctorDashboard patientData={interviewData} onBack={() => navigate("chat")} />;
+  }
+  if (page === "idle") {
+    return <StartScreen onStart={() => { clearSession(); navigate("language"); }} />;
+  }
+  if (page === "language") {
+    return <LanguagePlaceholder onContinue={() => navigate("chat")} onBack={() => navigate("idle")} />;
   }
 
   return (
