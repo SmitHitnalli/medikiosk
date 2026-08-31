@@ -11,11 +11,11 @@
 - [x] Connect dashboard to real data
 - [x] Robust Ollama JSON parsing and retry
 - [x] Dashboard safely handles mismatched AI data types
+- [x] Speech-to-text (/transcribe endpoint)
 
 ## Next up
 - [x] Create docs/schema.json
 - [x] Create docs/conversation_scripts.md
-- [ ] Speech-to-text (/transcribe endpoint)
 - [ ] Text-to-speech (/speak endpoint)
 - [ ] OCR endpoint
 - [ ] Mock ABDM push endpoint

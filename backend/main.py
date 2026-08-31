@@ -2,18 +2,22 @@ from fastapi import FastAPI
 
 
 import json
+import os
 import re
+import tempfile
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "llama3.1:8b"
+_whisper_model = None
 SYSTEM_PROMPT = """You are a clinical history-taking assistant for MediKiosk, used in Indian government OPD settings. You are NOT a diagnostic tool - you only collect and structure patient history for a physician to review.
 
 Your job: conduct a natural, empathetic conversation with the patient to gather their chief complaint and history, following the SOCRATES framework (Site, Onset, Character, Radiation, Associated symptoms, Timing, Exacerbating/relieving factors, Severity) for any symptom-based complaint.
@@ -72,6 +76,56 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _get_whisper_model():
+    global _whisper_model
+    if _whisper_model is None:
+        from faster_whisper import WhisperModel
+
+        try:
+            import ctranslate2
+
+            has_gpu = ctranslate2.get_cuda_device_count() > 0
+        except (ImportError, RuntimeError):
+            has_gpu = False
+
+        device = "cuda" if has_gpu else "cpu"
+        compute_type = "float16" if has_gpu else "int8"
+        _whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
+    return _whisper_model
+
+
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
+    audio_data = await file.read()
+    if not audio_data:
+        raise HTTPException(status_code=400, detail="The uploaded audio file is empty")
+
+    suffix = Path(file.filename or "audio.webm").suffix or ".webm"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(audio_data)
+            temp_path = temp_file.name
+
+        model = _get_whisper_model()
+        segments, _ = model.transcribe(temp_path)
+        text = " ".join(segment.text.strip() for segment in segments).strip()
+        return {"text": text}
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="faster-whisper is not installed. Install backend requirements and try again.",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Audio transcription failed") from exc
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
 
 def check_red_flags(message: str) -> bool:

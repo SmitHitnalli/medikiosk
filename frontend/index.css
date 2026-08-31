@@ -68,6 +68,12 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .composer input:focus { border-color: #0f766e; box-shadow: 0 0 0 3px #0f766e1c; }
 .composer button { padding: 0 22px; border: 0; border-radius: 12px; color: white; background: #0f766e; cursor: pointer; font-weight: 700; }
 .composer button:disabled { cursor: not-allowed; opacity: .45; }
+.mic-button { display: inline-flex; align-items: center; gap: 7px; padding: 0 14px; border: 1px solid #cbded7 !important; color: #35665e !important; background: #f4faf6 !important; font-size: 13px; }
+.mic-button.recording { border-color: #e17b73 !important; color: #a52b27 !important; background: #fff0ee !important; }
+.mic-icon { font-size: 10px; }.mic-button.recording .mic-icon { animation: recording-pulse 1s infinite; color: #d83d35; }
+.recording-status { margin: -7px 24px 8px; color: #b42318; font-size: 12px; text-align: right; }
+.recording-dot { display: inline-block; width: 7px; height: 7px; margin-right: 5px; border-radius: 50%; background: #d83d35; animation: recording-pulse 1s infinite; }
+@keyframes recording-pulse { 50% { opacity: .35; transform: scale(.75); } }
 .disclaimer { margin: 0; padding: 0 24px 18px; color: #80958f; font-size: 11px; text-align: center; }
 .completion-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 24px 16px; padding: 14px 16px; border: 1px solid #b8dccc; border-radius: 13px; color: #20594e; background: #effaf3; }
 .completion-card strong { font-size: 14px; }.completion-card p { margin: 3px 0 0; color: #5d7f75; font-size: 12px; }
