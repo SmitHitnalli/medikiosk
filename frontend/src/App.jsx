@@ -3,6 +3,7 @@ import ClearDataButton from "./ClearDataButton";
 import ConsentScreen from "./ConsentScreen";
 import DoctorDashboard from "./DoctorDashboard";
 import LanguageSelection from "./LanguageSelection";
+import ModeSelection from "./ModeSelection";
 import { stopAllAudio } from "./audio";
 
 const CHAT_ENDPOINT = "http://localhost:8080/chat";
@@ -40,22 +41,6 @@ function StartScreen({ onStart }) {
   );
 }
 
-function ModePlaceholder({ language, onContinue, onBack, onClearData }) {
-  return (
-    <main className="start-shell">
-      <section className="start-card language-card" aria-label="Mode selection placeholder">
-        <div className="brand-mark small" aria-hidden="true">M</div>
-        <p className="start-eyebrow">MediKiosk</p>
-        <h1>Choose your interview mode</h1>
-        <p className="start-copy">Mode selection will be available here. Continue with chat for this demo ({language === "hi" ? "Hindi" : "English"}).</p>
-        <button className="start-button" type="button" onClick={onContinue}>Continue to chat</button>
-        <ClearDataButton onClearData={onClearData} />
-        <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
-      </section>
-    </main>
-  );
-}
-
 function App() {
   const [page, setPage] = useState(() => {
     if (window.location.hash === "#dashboard") return "dashboard";
@@ -68,6 +53,7 @@ function App() {
   const [interviewData, setInterviewData] = useState(null);
   const [interviewComplete, setInterviewComplete] = useState(false);
   const [language, setLanguage] = useState(null);
+  const [interactionMode, setInteractionMode] = useState(null);
   const [clearConfirmation, setClearConfirmation] = useState("");
   const [mode, setMode] = useState("general");
   const [message, setMessage] = useState("");
@@ -116,6 +102,7 @@ function App() {
     setInterviewData(null);
     setInterviewComplete(false);
     setLanguage(null);
+    setInteractionMode(null);
     setMode("general");
     setMessage("");
     setRedFlagReason("");
@@ -366,16 +353,16 @@ function App() {
     return <DoctorDashboard patientData={interviewData} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} />;
   }
   if (page === "idle") {
-    return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
-  }
-  if (page === "language") {
-    return <LanguageSelection onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("consent"); }} onBack={() => navigate("idle")} />;
-  }
-  if (page === "consent") {
-    return <ConsentScreen language={language} onAgree={() => navigate("mode")} onDecline={() => returnToStart(false)} onClearData={() => returnToStart(true)} />;
+    return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("mode"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
   }
   if (page === "mode") {
-    return <ModePlaceholder language={language} onContinue={() => navigate("chat")} onBack={() => navigate("language")} onClearData={() => returnToStart(true)} />;
+    return <ModeSelection onSelect={(selectedMode) => { setInteractionMode(selectedMode); navigate("language"); }} onBack={() => navigate("idle")} />;
+  }
+  if (page === "language") {
+    return <LanguageSelection interactionMode={interactionMode} onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("consent"); }} onBack={() => navigate("mode")} />;
+  }
+  if (page === "consent") {
+    return <ConsentScreen language={language} interactionMode={interactionMode} onAgree={() => navigate("chat")} onDecline={() => returnToStart(false)} onClearData={() => returnToStart(true)} />;
   }
 
   return (

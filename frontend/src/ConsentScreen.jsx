@@ -8,12 +8,17 @@ const CONSENT_PROMPTS = {
   hi: "हम आपसे आपके स्वास्थ्य के बारे में कुछ सवाल पूछेंगे और आपके द्वारा साझा किए गए दस्तावेज़ देख सकते हैं। यह केवल आपके डॉक्टर को आपकी मुलाकात को बेहतर समझने में मदद करने के लिए है। क्या आप आगे बढ़ने के लिए सहमत हैं?",
 };
 
-function ConsentScreen({ language, onAgree, onDecline, onClearData }) {
-  const [promptStatus, setPromptStatus] = useState("Playing the consent explanation...");
+function ConsentScreen({ language, interactionMode, onAgree, onDecline, onClearData }) {
+  const isSpeakMode = interactionMode === "speak";
+  const [promptStatus, setPromptStatus] = useState(isSpeakMode ? "Playing the consent explanation..." : "Please read the explanation and choose whether you agree to continue.");
   const prompt = CONSENT_PROMPTS[language] || CONSENT_PROMPTS.en;
   const playedPromptRef = useRef("");
 
   useEffect(() => {
+    if (!isSpeakMode) {
+      setPromptStatus("Please read the explanation and choose whether you agree to continue.");
+      return undefined;
+    }
     const promptKey = language || "en";
     if (playedPromptRef.current === promptKey) return undefined;
     let cancelled = false;
@@ -41,7 +46,7 @@ function ConsentScreen({ language, onAgree, onDecline, onClearData }) {
       controller.abort();
       stopAllAudio();
     };
-  }, [language, prompt]);
+  }, [isSpeakMode, language, prompt]);
 
   return (
     <main className="start-shell">
