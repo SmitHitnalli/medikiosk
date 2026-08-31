@@ -5,6 +5,7 @@
 - [x] AGENTS.md and ROADMAP.md created
 - [x] Backend skeleton (FastAPI, /health endpoint)
 - [x] Conversation engine (/chat endpoint using Ollama)
+- [x] Red-flag alert feature
 
 ## Next up
 - [x] Create docs/schema.json
@@ -15,7 +16,6 @@
 - [ ] Speech-to-text (/transcribe endpoint)
 - [ ] Text-to-speech (/speak endpoint)
 - [ ] OCR endpoint
-- [ ] Red-flag alert feature
 - [ ] Mock ABDM push endpoint
 - [ ] Testing with sample patients
 - [ ] Backup demo video

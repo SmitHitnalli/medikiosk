@@ -65,6 +65,37 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def check_red_flags(message: str) -> bool:
+    text = message.lower()
+
+    has_chest_pain_or_chest = "chest pain" in text or "chest" in text
+    has_breathing_term = any(term in text for term in ("breath", "breathless", "breathing"))
+    if has_chest_pain_or_chest and has_breathing_term:
+        return True
+
+    if (
+        "chest pain" in text
+        and any(term in text for term in ("sweat", "sweating"))
+        and any(term in text for term in ("dizzy", "dizziness"))
+    ):
+        return True
+
+    if "headache" in text and any(term in text for term in ("vision", "confus")):
+        return True
+
+    if "fever" in text and any(term in text for term in ("stiff neck", "drowsy", "drowsiness")):
+        return True
+
+    if any(term in text for term in ("weakness", "numbness")) and any(
+        term in text for term in ("one side", "left side", "right side")
+    ):
+        return True
+
+    return "bleeding" in text and any(
+        term in text for term in ("won't stop", "not stopping", "heavy")
+    )
+
+
 def _parse_model_json(content: str) -> dict:
     cleaned = content.strip()
     if cleaned.startswith("```"):
@@ -125,4 +156,11 @@ def chat(request: ChatRequest) -> dict:
     content = ollama_response.get("message", {}).get("content")
     if not isinstance(content, str):
         raise HTTPException(status_code=502, detail="Ollama response did not contain message content")
-    return _parse_model_json(content)
+    result = _parse_model_json(content)
+    llm_red_flag = bool(result.get("red_flag", False))
+    keyword_red_flag = check_red_flags(request.message)
+    if keyword_red_flag or llm_red_flag:
+        result["red_flag"] = True
+        if keyword_red_flag and not result.get("red_flag_reason"):
+            result["red_flag_reason"] = "Emergency symptom pattern detected"
+    return result
