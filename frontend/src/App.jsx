@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DoctorDashboard from "./DoctorDashboard";
+import LanguageSelection from "./LanguageSelection";
 
 const CHAT_ENDPOINT = "http://localhost:8080/chat";
 const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
@@ -36,15 +37,15 @@ function StartScreen({ onStart }) {
   );
 }
 
-function LanguagePlaceholder({ onContinue, onBack }) {
+function ModePlaceholder({ language, onContinue, onBack }) {
   return (
     <main className="start-shell">
-      <section className="start-card language-card" aria-label="Language selection placeholder">
+      <section className="start-card language-card" aria-label="Mode selection placeholder">
         <div className="brand-mark small" aria-hidden="true">M</div>
         <p className="start-eyebrow">MediKiosk</p>
-        <h1>Choose your language</h1>
-        <p className="start-copy">Language selection will be available here. Continue with English for this demo.</p>
-        <button className="start-button" type="button" onClick={onContinue}>Continue in English</button>
+        <h1>Choose your interview mode</h1>
+        <p className="start-copy">Mode selection will be available here. Continue with chat for this demo ({language === "hi" ? "Hindi" : "English"}).</p>
+        <button className="start-button" type="button" onClick={onContinue}>Continue to chat</button>
         <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
       </section>
     </main>
@@ -56,10 +57,12 @@ function App() {
     if (window.location.hash === "#dashboard") return "dashboard";
     if (window.location.hash === "#chat") return "chat";
     if (window.location.hash === "#language") return "language";
+    if (window.location.hash === "#mode") return "mode";
     return "idle";
   });
   const [interviewData, setInterviewData] = useState(null);
   const [interviewComplete, setInterviewComplete] = useState(false);
+  const [language, setLanguage] = useState(null);
   const [mode, setMode] = useState("general");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([
@@ -106,6 +109,7 @@ function App() {
     setMessages([{ role: "assistant", content: "Hello. I’m here to understand what brings you in today." }]);
     setInterviewData(null);
     setInterviewComplete(false);
+    setLanguage(null);
     setMode("general");
     setMessage("");
     setRedFlagReason("");
@@ -119,14 +123,14 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash;
-      setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#chat" ? "chat" : "idle");
+      setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#mode" ? "mode" : hash === "#chat" ? "chat" : "idle");
     };
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
   }, []);
 
   function navigate(nextPage) {
-    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "chat" ? "chat" : "";
+    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "mode" ? "mode" : nextPage === "chat" ? "chat" : "";
     setPage(nextPage);
   }
 
@@ -179,6 +183,7 @@ function App() {
           message: trimmedMessage,
           history,
           mode,
+          language,
         }),
       });
 
@@ -343,7 +348,10 @@ function App() {
     return <StartScreen onStart={() => { clearSession(); navigate("language"); }} />;
   }
   if (page === "language") {
-    return <LanguagePlaceholder onContinue={() => navigate("chat")} onBack={() => navigate("idle")} />;
+    return <LanguageSelection onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("mode"); }} onBack={() => navigate("idle")} />;
+  }
+  if (page === "mode") {
+    return <ModePlaceholder language={language} onContinue={() => navigate("chat")} onBack={() => navigate("language")} />;
   }
 
   return (

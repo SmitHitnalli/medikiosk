@@ -15,10 +15,10 @@
 - [x] CPU-only faster-whisper configuration
 - [x] Text-to-speech endpoint (/speak)
 - [x] OCR endpoint
+- [x] Language selection (spoken EN/HI prompt + manual buttons)
 
 ## Next up (v2 feature plan)
 - [x] Start button / idle screen with session clearing and idle timeout
-- [ ] Language selection (spoken EN/HI prompt + manual buttons)
 - [ ] Consent screen with persistent cancel/clear-data option
 - [ ] Mode selection (hands-free vs chat)
 - [ ] Medi ID system (patients table: medi_id, name, phone, prakriti; non-sequential IDs, lockout after 3 failed attempts, masked phone display)

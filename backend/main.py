@@ -87,6 +87,7 @@ class ChatRequest(BaseModel):
     message: str
     history: list[dict[str, str]] = Field(default_factory=list)
     mode: Literal["general", "ayush"]
+    language: Literal["en", "hi"] | None = None
 
 
 class SpeakRequest(BaseModel):
@@ -352,7 +353,7 @@ def chat(request: ChatRequest) -> dict:
     messages.append(
         {
             "role": "user",
-            "content": f"Current mode: {request.mode}\nPatient's latest message: {request.message}",
+            "content": f"Current language: {request.language or 'en'}\nCurrent mode: {request.mode}\nPatient's latest message: {request.message}",
         }
     )
     payload = {
