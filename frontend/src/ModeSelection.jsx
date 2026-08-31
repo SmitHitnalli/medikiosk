@@ -3,9 +3,24 @@ import { playAudioBlob, stopAllAudio } from "./audio";
 
 const SPEAK_ENDPOINT = "http://localhost:8080/speak";
 const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
-const MODE_PROMPT = "Would you like to speak with me, or type your answers? Say Speak or Chat, or tap a button below.";
+const MODE_PROMPTS = {
+  en: "Would you like to speak with me, or type your answers? Say Speak or Chat, or tap a button below.",
+  hi: "क्या आप मुझसे बोलकर बात करना चाहेंगे या अपने जवाब टाइप करना चाहेंगे? बोलकर बात करने के लिए Speak या टाइप करने के लिए Chat कहें, या नीचे दिए बटन को दबाएं।",
+};
 
-function ModeSelection({ onSelect, onBack }) {
+function playHindiPlaceholder(text) {
+  if (!window.speechSynthesis) return Promise.reject(new Error("Hindi voice fallback is unavailable."));
+  return new Promise((resolve) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "hi-IN";
+    utterance.onend = resolve;
+    utterance.onerror = resolve;
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
+function ModeSelection({ language, onSelect, onBack }) {
+  const prompt = MODE_PROMPTS[language] || MODE_PROMPTS.en;
   const [isListening, setIsListening] = useState(false);
   const [error, setError] = useState("");
   const recorderRef = useRef(null);
@@ -25,7 +40,18 @@ function ModeSelection({ onSelect, onBack }) {
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("Mode prompt unavailable");
-        if (!cancelled) await playAudioBlob(await response.blob());
+        if (!cancelled) {
+          const audioBlob = await response.blob();
+          if (language === "hi") {
+            try {
+              await playHindiPlaceholder(prompt);
+            } catch {
+              await playAudioBlob(audioBlob);
+            }
+          } else {
+            await playAudioBlob(audioBlob);
+          }
+        }
       } catch (promptError) {
         if (!cancelled && promptError.name !== "AbortError" && promptError.message !== "Audio playback stopped.") {
           setError("Choose Speak or Chat below. The spoken prompt was unavailable.");
@@ -38,7 +64,7 @@ function ModeSelection({ onSelect, onBack }) {
       controller.abort();
       stopAllAudio();
     };
-  }, []);
+  }, [language, prompt]);
 
   useEffect(() => () => {
     window.clearTimeout(timeoutRef.current);
@@ -106,7 +132,7 @@ function ModeSelection({ onSelect, onBack }) {
         <div className="brand-mark small" aria-hidden="true">M</div>
         <p className="start-eyebrow">MediKiosk</p>
         <h1>How would you like to continue?</h1>
-        <p className="start-copy">Would you like to speak with me, or type your answers?</p>
+        <p className="start-copy">{prompt}</p>
         <div className="language-buttons">
           <button className="language-button" type="button" onClick={() => onSelect("speak")}>Speak</button>
           <button className="language-button" type="button" onClick={() => onSelect("chat")}>Chat</button>

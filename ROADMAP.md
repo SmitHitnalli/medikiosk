@@ -21,7 +21,7 @@
 
 ## Next up (v2 feature plan)
 - [x] Start button / idle screen with session clearing and idle timeout
-- [x] Mode selection (Speak vs Chat)
+- [x] Mode selection (Speak vs Chat, after language selection)
 - [ ] Medi ID system (patients table: medi_id, name, phone, prakriti; non-sequential IDs, lockout after 3 failed attempts, masked phone display)
 - [ ] Department selection (named departments + 'not sure/general' option)
 - [ ] Rewritten nurse-persona system prompt, AYUSH-default, hard cap at 15-20 exchanges

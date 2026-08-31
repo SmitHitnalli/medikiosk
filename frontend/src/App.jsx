@@ -353,13 +353,13 @@ function App() {
     return <DoctorDashboard patientData={interviewData} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} />;
   }
   if (page === "idle") {
-    return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("mode"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
-  }
-  if (page === "mode") {
-    return <ModeSelection onSelect={(selectedMode) => { setInteractionMode(selectedMode); navigate("language"); }} onBack={() => navigate("idle")} />;
+    return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
   }
   if (page === "language") {
-    return <LanguageSelection interactionMode={interactionMode} onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("consent"); }} onBack={() => navigate("mode")} />;
+    return <LanguageSelection interactionMode={interactionMode} onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("mode"); }} onBack={() => navigate("idle")} />;
+  }
+  if (page === "mode") {
+    return <ModeSelection language={language} onSelect={(selectedMode) => { setInteractionMode(selectedMode); navigate("consent"); }} onBack={() => navigate("language")} />;
   }
   if (page === "consent") {
     return <ConsentScreen language={language} interactionMode={interactionMode} onAgree={() => navigate("chat")} onDecline={() => returnToStart(false)} onClearData={() => returnToStart(true)} />;
