@@ -27,9 +27,8 @@ function playHindiPlaceholder(text) {
   });
 }
 
-function LanguageSelection({ interactionMode, onSelect, onBack }) {
-  const isSpeakMode = interactionMode === "speak";
-  const [promptStatus, setPromptStatus] = useState(isSpeakMode ? "Playing language prompts..." : "Choose a language below to continue.");
+function LanguageSelection({ onSelect, onBack }) {
+  const [promptStatus, setPromptStatus] = useState("Playing language prompts...");
   const [isListening, setIsListening] = useState(false);
   const [voiceError, setVoiceError] = useState("");
   const recorderRef = useRef(null);
@@ -37,10 +36,6 @@ function LanguageSelection({ interactionMode, onSelect, onBack }) {
   const chunksRef = useRef([]);
 
   useEffect(() => {
-    if (!isSpeakMode) {
-      setPromptStatus("Choose a language below to continue.");
-      return undefined;
-    }
     let cancelled = false;
     async function playPrompts() {
       try {
@@ -70,7 +65,7 @@ function LanguageSelection({ interactionMode, onSelect, onBack }) {
       stopAllAudio();
       window.speechSynthesis?.cancel();
     };
-  }, [isSpeakMode]);
+  }, []);
 
   useEffect(() => () => {
     if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
@@ -146,7 +141,7 @@ function LanguageSelection({ interactionMode, onSelect, onBack }) {
         </button>
         {isListening && <p className="recording-status language-recording"><span className="recording-dot" /> Say “English” or “Hindi”</p>}
         {voiceError && <p className="language-error" role="alert">{voiceError}</p>}
-        {isSpeakMode && <p className="known-gap">Hindi voice playback uses a browser placeholder until a Hindi Piper voice is available.</p>}
+        <p className="known-gap">Hindi voice playback uses a browser placeholder until a Hindi Piper voice is available.</p>
         <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
       </section>
     </main>

@@ -17,7 +17,7 @@
 - [x] OCR endpoint
 - [x] Language selection (spoken EN/HI prompt + manual buttons)
 - [x] Consent screen with persistent cancel/clear-data option
-- [x] Language, mode, and consent screen audio lifecycle and single-playback behavior
+- [x] Language selection, mode, and consent screen audio lifecycle and single-playback behavior
 
 ## Next up (v2 feature plan)
 - [x] Start button / idle screen with session clearing and idle timeout

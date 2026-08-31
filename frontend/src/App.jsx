@@ -356,7 +356,7 @@ function App() {
     return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
   }
   if (page === "language") {
-    return <LanguageSelection interactionMode={interactionMode} onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("mode"); }} onBack={() => navigate("idle")} />;
+    return <LanguageSelection onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("mode"); }} onBack={() => navigate("idle")} />;
   }
   if (page === "mode") {
     return <ModeSelection language={language} onSelect={(selectedMode) => { setInteractionMode(selectedMode); navigate("consent"); }} onBack={() => navigate("language")} />;
