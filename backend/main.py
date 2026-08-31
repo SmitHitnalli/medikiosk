@@ -5,6 +5,7 @@ import json
 import os
 import re
 import tempfile
+import traceback
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -98,13 +99,13 @@ def _get_whisper_model():
 
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
-    audio_data = await file.read()
-    if not audio_data:
-        raise HTTPException(status_code=400, detail="The uploaded audio file is empty")
-
-    suffix = Path(file.filename or "audio.webm").suffix or ".webm"
     temp_path = None
     try:
+        audio_data = await file.read()
+        if not audio_data:
+            raise HTTPException(status_code=400, detail="The uploaded audio file is empty")
+
+        suffix = Path(file.filename or "audio.webm").suffix or ".webm"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(audio_data)
             temp_path = temp_file.name
@@ -113,12 +114,16 @@ async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
         segments, _ = model.transcribe(temp_path)
         text = " ".join(segment.text.strip() for segment in segments).strip()
         return {"text": text}
+    except HTTPException:
+        raise
     except ImportError as exc:
+        traceback.print_exc()
         raise HTTPException(
             status_code=503,
             detail="faster-whisper is not installed. Install backend requirements and try again.",
         ) from exc
     except Exception as exc:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail="Audio transcription failed") from exc
     finally:
         if temp_path:
