@@ -32,12 +32,30 @@ const hpiFields = [
   ["Severity", "severity"],
 ];
 
-function ListValue({ items = [] }) {
-  return items.length ? (
+function normaliseItems(value) {
+  const values = Array.isArray(value) ? value : value == null ? [] : [value];
+  return values
+    .map((item) => {
+      if (typeof item === "string") return item.trim();
+      if (typeof item === "object") return JSON.stringify(item);
+      return String(item);
+    })
+    .filter(Boolean);
+}
+
+function SafeValue({ value }) {
+  const values = normaliseItems(value);
+  if (!values.length) return <span className="muted-value">Not provided</span>;
+  if (values.length === 1) return <span>{values[0]}</span>;
+  return (
     <ul className="dashboard-list">
-      {items.map((item) => <li key={item}>{item}</li>)}
+      {values.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
     </ul>
-  ) : <span className="muted-value">None recorded</span>;
+  );
+}
+
+function ListValue({ items }) {
+  return <SafeValue value={items} />;
 }
 
 function DoctorDashboard({ patientData, onBack }) {
@@ -45,7 +63,7 @@ function DoctorDashboard({ patientData, onBack }) {
   const hpi = patient.hpi || {};
   const drugHistory = patient.drug_allergy_history || {};
   const ayush = patient.ayush_assessment || {};
-  const hasAyushData = Object.values(ayush).some(Boolean);
+  const hasAyushData = Object.values(ayush).some((value) => normaliseItems(value).length > 0);
   const isSample = !patientData;
 
   return (
@@ -61,7 +79,7 @@ function DoctorDashboard({ patientData, onBack }) {
 
       <section className="chief-complaint-card">
         <div className="section-kicker">Chief complaint</div>
-        <h2>{patient.chief_complaint || "No chief complaint recorded"}</h2>
+        <div className="chief-complaint-value"><SafeValue value={patient.chief_complaint} /></div>
         <span className="sample-badge">{isSample ? "Sample patient · Draft" : "Live conversation · Ready for review"}</span>
       </section>
 
@@ -75,7 +93,7 @@ function DoctorDashboard({ patientData, onBack }) {
             {hpiFields.map(([label, key]) => (
               <div className="detail-item" key={key}>
                 <dt>{label}</dt>
-                <dd>{hpi[key]}</dd>
+                <dd><SafeValue value={hpi[key]} /></dd>
               </div>
             ))}
             <div className="detail-item detail-item-wide">
@@ -97,10 +115,10 @@ function DoctorDashboard({ patientData, onBack }) {
           <section className="dashboard-card ayush-card">
             <div className="card-heading"><div><p className="section-kicker">AYUSH assessment</p><h2>Constitution & patterns</h2></div><span className="ayush-badge">AYUSH</span></div>
             <dl className="detail-grid ayush-grid">
-              <div className="detail-item"><dt>Prakriti</dt><dd>{ayush.prakriti}</dd></div>
-              <div className="detail-item"><dt>Agni</dt><dd>{ayush.agni}</dd></div>
-              <div className="detail-item"><dt>Koshtha</dt><dd>{ayush.koshtha}</dd></div>
-              <div className="detail-item detail-item-wide"><dt>Nidana</dt><dd>{ayush.nidana}</dd></div>
+              <div className="detail-item"><dt>Prakriti</dt><dd><SafeValue value={ayush.prakriti} /></dd></div>
+              <div className="detail-item"><dt>Agni</dt><dd><SafeValue value={ayush.agni} /></dd></div>
+              <div className="detail-item"><dt>Koshtha</dt><dd><SafeValue value={ayush.koshtha} /></dd></div>
+              <div className="detail-item detail-item-wide"><dt>Nidana</dt><dd><SafeValue value={ayush.nidana} /></dd></div>
             </dl>
           </section>
         )}

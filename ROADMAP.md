@@ -10,6 +10,7 @@
 - [x] Doctor dashboard (fake data first)
 - [x] Connect dashboard to real data
 - [x] Robust Ollama JSON parsing and retry
+- [x] Dashboard safely handles mismatched AI data types
 
 ## Next up
 - [x] Create docs/schema.json
