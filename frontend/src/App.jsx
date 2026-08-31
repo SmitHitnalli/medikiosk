@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import DoctorDashboard from "./DoctorDashboard";
 
 const CHAT_ENDPOINT = "http://localhost:8080/chat";
 
 function App() {
+  const [page, setPage] = useState(() => window.location.hash === "#dashboard" ? "dashboard" : "chat");
   const [mode, setMode] = useState("general");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([
@@ -15,6 +17,17 @@ function App() {
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState("");
   const messageListRef = useRef(null);
+
+  useEffect(() => {
+    const handleHashChange = () => setPage(window.location.hash === "#dashboard" ? "dashboard" : "chat");
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
+  function navigate(nextPage) {
+    window.location.hash = nextPage === "dashboard" ? "dashboard" : "";
+    setPage(nextPage);
+  }
 
   useEffect(() => {
     const list = messageListRef.current;
@@ -65,6 +78,10 @@ function App() {
     }
   }
 
+  if (page === "dashboard") {
+    return <DoctorDashboard onBack={() => navigate("chat")} />;
+  }
+
   return (
     <main className="app-shell">
       <section className="chat-card" aria-label="MediKiosk patient interview">
@@ -74,17 +91,20 @@ function App() {
             <h1>Patient interview</h1>
             <p className="subtitle">A structured history for your physician to review.</p>
           </div>
-          <div className="mode-control">
-            <span className="mode-label">{mode === "general" ? "General mode" : "AYUSH mode"}</span>
-            <label className="switch">
-              <input
-                type="checkbox"
-                checked={mode === "ayush"}
-                onChange={(event) => setMode(event.target.checked ? "ayush" : "general")}
-                aria-label="Toggle General mode and AYUSH mode"
-              />
-              <span className="slider" />
-            </label>
+          <div className="header-actions">
+            <a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>Doctor dashboard →</a>
+            <div className="mode-control">
+              <span className="mode-label">{mode === "general" ? "General mode" : "AYUSH mode"}</span>
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={mode === "ayush"}
+                  onChange={(event) => setMode(event.target.checked ? "ayush" : "general")}
+                  aria-label="Toggle General mode and AYUSH mode"
+                />
+                <span className="slider" />
+              </label>
+            </div>
           </div>
         </header>
 

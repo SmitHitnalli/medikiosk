@@ -7,11 +7,11 @@
 - [x] Conversation engine (/chat endpoint using Ollama)
 - [x] Red-flag alert feature
 - [x] Frontend chat UI
+- [x] Doctor dashboard (fake data first)
 
 ## Next up
 - [x] Create docs/schema.json
 - [x] Create docs/conversation_scripts.md
-- [ ] Doctor dashboard (fake data first)
 - [ ] Connect dashboard to real data
 - [ ] Speech-to-text (/transcribe endpoint)
 - [ ] Text-to-speech (/speak endpoint)
