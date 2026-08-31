@@ -14,11 +14,11 @@
 - [x] Speech-to-text endpoint (/transcribe)
 - [x] CPU-only faster-whisper configuration
 - [x] Text-to-speech endpoint (/speak)
+- [x] OCR endpoint
 
 ## Next up
 - [x] Create docs/schema.json
 - [x] Create docs/conversation_scripts.md
-- [ ] OCR endpoint
 - [ ] Mock ABDM push endpoint
 - [ ] Testing with sample patients
 - [ ] Backup demo video

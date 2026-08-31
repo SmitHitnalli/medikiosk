@@ -25,6 +25,25 @@ PIPER_VOICE_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-me
 PIPER_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx.json"
 _whisper_model = None
 _piper_voice = None
+_easyocr_reader = None
+OCR_PROMPT = """You extract structured information from OCR text from a patient's prescription, lab report, or discharge summary. Return JSON only.
+
+Extract only these fields, matching the digitized_documents.extracted_entities structure in docs/schema.json:
+{
+  "diagnoses": ["string"],
+  "medications": ["string"],
+  "lab_values": [
+    {
+      "name": "string",
+      "value": "string",
+      "unit": "string",
+      "reference_range": "string",
+      "flag": "normal | high | low"
+    }
+  ]
+}
+
+Use empty arrays when a field is not present. Do not invent values or add fields outside this structure. For flag, use normal when the report does not indicate high or low."""
 SYSTEM_PROMPT = """You are a clinical history-taking assistant for MediKiosk, used in Indian government OPD settings. You are NOT a diagnostic tool - you only collect and structure patient history for a physician to review.
 
 Your job: conduct a natural, empathetic conversation with the patient to gather their chief complaint and history, following the SOCRATES framework (Site, Onset, Character, Radiation, Associated symptoms, Timing, Exacerbating/relieving factors, Severity) for any symptom-based complaint.
@@ -126,6 +145,79 @@ async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Audio transcription failed") from exc
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+def _get_easyocr_reader():
+    global _easyocr_reader
+    if _easyocr_reader is None:
+        import easyocr
+
+        _easyocr_reader = easyocr.Reader(["en"])
+    return _easyocr_reader
+
+
+@app.post("/ocr")
+async def ocr(file: UploadFile = File(...)) -> dict:
+    image_data = await file.read()
+    if not image_data:
+        raise HTTPException(status_code=400, detail="The uploaded image file is empty")
+
+    suffix = Path(file.filename or "document.jpg").suffix or ".jpg"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(image_data)
+            temp_path = temp_file.name
+
+        reader = _get_easyocr_reader()
+        extracted_text = "\n".join(reader.readtext(temp_path, detail=0)).strip()
+        if not extracted_text:
+            return {"extracted_entities": {"diagnoses": [], "medications": [], "lab_values": []}}
+
+        ollama_request = urllib.request.Request(
+            OLLAMA_URL,
+            data=json.dumps(
+                {
+                    "model": OLLAMA_MODEL,
+                    "messages": [
+                        {"role": "system", "content": OCR_PROMPT},
+                        {"role": "user", "content": extracted_text},
+                    ],
+                    "stream": False,
+                    "format": "json",
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        parsed = _parse_model_json(_call_ollama(ollama_request))
+        entities = parsed.get("extracted_entities", parsed)
+        if not isinstance(entities, dict):
+            raise HTTPException(status_code=502, detail="Ollama returned an invalid OCR structure")
+        return {
+            "extracted_entities": {
+                "diagnoses": entities.get("diagnoses", []),
+                "medications": entities.get("medications", []),
+                "lab_values": entities.get("lab_values", []),
+            }
+        }
+    except HTTPException:
+        raise
+    except ImportError as exc:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=503,
+            detail="EasyOCR is not installed. Install backend requirements and try again.",
+        ) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Document OCR failed") from exc
     finally:
         if temp_path:
             try:
