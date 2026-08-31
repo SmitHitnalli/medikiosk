@@ -8,17 +8,23 @@ import tempfile
 import traceback
 import urllib.error
 import urllib.request
+import wave
 from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
+from starlette.responses import FileResponse
 
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "llama3.1:8b"
+PIPER_VOICE_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx"
+PIPER_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx.json"
 _whisper_model = None
+_piper_voice = None
 SYSTEM_PROMPT = """You are a clinical history-taking assistant for MediKiosk, used in Indian government OPD settings. You are NOT a diagnostic tool - you only collect and structure patient history for a physician to review.
 
 Your job: conduct a natural, empathetic conversation with the patient to gather their chief complaint and history, following the SOCRATES framework (Site, Onset, Character, Radiation, Associated symptoms, Timing, Exacerbating/relieving factors, Severity) for any symptom-based complaint.
@@ -62,6 +68,10 @@ class ChatRequest(BaseModel):
     message: str
     history: list[dict[str, str]] = Field(default_factory=list)
     mode: Literal["general", "ayush"]
+
+
+class SpeakRequest(BaseModel):
+    text: str
 
 
 app = FastAPI()
@@ -116,6 +126,53 @@ async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Audio transcription failed") from exc
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+def _get_piper_voice():
+    global _piper_voice
+    if _piper_voice is None:
+        from piper import PiperVoice
+
+        _piper_voice = PiperVoice.load(PIPER_VOICE_PATH, config_path=PIPER_CONFIG_PATH)
+    return _piper_voice
+
+
+@app.post("/speak")
+def speak(request: SpeakRequest) -> FileResponse:
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text to synthesize cannot be empty")
+
+    temp_path = None
+    try:
+        voice = _get_piper_voice()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
+            temp_path = temp_file.name
+        with wave.open(temp_path, "wb") as wav_file:
+            voice.synthesize_wav(text, wav_file)
+        response = FileResponse(
+            temp_path,
+            media_type="audio/wav",
+            filename="medikiosk-summary.wav",
+            background=BackgroundTask(os.remove, temp_path),
+        )
+        temp_path = None
+        return response
+    except ImportError as exc:
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=503,
+            detail="piper-tts is not installed. Install backend requirements and try again.",
+        ) from exc
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Speech synthesis failed") from exc
     finally:
         if temp_path:
             try:

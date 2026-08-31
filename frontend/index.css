@@ -106,6 +106,10 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .chief-complaint-value { position: relative; z-index: 1; margin: 0; color: #173b3c; font-family: "Space Grotesk", sans-serif; font-size: 24px; font-weight: 600; }
 .sample-badge, .framework-badge, .ayush-badge { display: inline-block; margin-top: 14px; padding: 5px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .sample-badge { color: #567a70; background: #eaf4ef; }
+.chief-complaint-actions { position: relative; z-index: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.play-summary-button { margin-top: 14px; padding: 6px 11px; border: 1px solid #9dcabd; border-radius: 999px; color: #0f766e; background: #f4fbf6; cursor: pointer; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.play-summary-button:hover { background: #e4f4eb; }.play-summary-button:disabled { cursor: wait; opacity: .6; }
+.speech-error { position: relative; z-index: 1; margin: 10px 0 0; color: #b42318; font-size: 12px; }
 .dashboard-grid { display: grid; grid-template-columns: 1.35fr .9fr; gap: 18px; max-width: 1100px; margin: 0 auto; }
 .dashboard-card { padding: 24px; }
 .hpi-card { grid-row: span 2; }
@@ -134,5 +138,6 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 @media (max-width: 600px) {
   .header-actions { flex-direction: column-reverse; align-items: flex-end; gap: 8px; }
   .chief-complaint-card h2 { font-size: 20px; }
+  .chief-complaint-actions { align-items: flex-start; flex-direction: column; gap: 0; }
   .dashboard-card, .chief-complaint-card { padding: 20px; }
 }

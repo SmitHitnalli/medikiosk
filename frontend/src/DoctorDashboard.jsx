@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 const samplePatient = {
   chief_complaint: "Chest discomfort, worse on exertion",
   hpi: {
@@ -32,6 +34,8 @@ const hpiFields = [
   ["Severity", "severity"],
 ];
 
+const SPEAK_ENDPOINT = "http://localhost:8080/speak";
+
 function normaliseItems(value) {
   const values = Array.isArray(value) ? value : value == null ? [] : [value];
   return values
@@ -41,6 +45,16 @@ function normaliseItems(value) {
       return String(item);
     })
     .filter(Boolean);
+}
+
+function textValue(value, fallback = "not provided") {
+  const values = normaliseItems(value);
+  return values.length ? values.join(", ") : fallback;
+}
+
+function buildSummary(patient) {
+  const hpi = patient.hpi || {};
+  return `The patient reports ${textValue(patient.chief_complaint)}. The symptom is located at ${textValue(hpi.site)}, started ${textValue(hpi.onset)}, and is described as ${textValue(hpi.character)}. It ${textValue(hpi.radiation, "does not radiate")}, with ${textValue(hpi.associated_symptoms, "no associated symptoms")}. It is ${textValue(hpi.timing)}, ${textValue(hpi.exacerbating_relieving, "with no aggravating or relieving factors noted")}, and has a severity of ${textValue(hpi.severity)}.`;
 }
 
 function SafeValue({ value }) {
@@ -65,6 +79,34 @@ function DoctorDashboard({ patientData, onBack }) {
   const ayush = patient.ayush_assessment || {};
   const hasAyushData = Object.values(ayush).some((value) => normaliseItems(value).length > 0);
   const isSample = !patientData;
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speechError, setSpeechError] = useState("");
+
+  async function playSummary() {
+    setIsSpeaking(true);
+    setSpeechError("");
+    try {
+      const response = await fetch(SPEAK_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: buildSummary(patient) }),
+      });
+      if (!response.ok) {
+        const result = await response.json();
+        throw new Error(result.detail || "The summary could not be spoken.");
+      }
+      const audio = new Audio(URL.createObjectURL(await response.blob()));
+      audio.onended = () => setIsSpeaking(false);
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        setSpeechError("The audio could not be played.");
+      };
+      await audio.play();
+    } catch (error) {
+      setIsSpeaking(false);
+      setSpeechError(error.message || "Unable to play the summary.");
+    }
+  }
 
   return (
     <main className="dashboard-shell">
@@ -80,7 +122,13 @@ function DoctorDashboard({ patientData, onBack }) {
       <section className="chief-complaint-card">
         <div className="section-kicker">Chief complaint</div>
         <div className="chief-complaint-value"><SafeValue value={patient.chief_complaint} /></div>
-        <span className="sample-badge">{isSample ? "Sample patient · Draft" : "Live conversation · Ready for review"}</span>
+        <div className="chief-complaint-actions">
+          <span className="sample-badge">{isSample ? "Sample patient · Draft" : "Live conversation · Ready for review"}</span>
+          <button className="play-summary-button" type="button" onClick={playSummary} disabled={isSpeaking}>
+            {isSpeaking ? "Playing summary..." : "▶ Play summary"}
+          </button>
+        </div>
+        {speechError && <p className="speech-error" role="alert">{speechError}</p>}
       </section>
 
       <div className="dashboard-grid">

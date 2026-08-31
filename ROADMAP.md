@@ -13,11 +13,11 @@
 - [x] Dashboard safely handles mismatched AI data types
 - [x] Speech-to-text endpoint (/transcribe)
 - [x] CPU-only faster-whisper configuration
+- [x] Text-to-speech (/speak endpoint)
 
 ## Next up
 - [x] Create docs/schema.json
 - [x] Create docs/conversation_scripts.md
-- [ ] Text-to-speech (/speak endpoint)
 - [ ] OCR endpoint
 - [ ] Mock ABDM push endpoint
 - [ ] Testing with sample patients

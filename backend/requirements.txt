@@ -3,3 +3,4 @@ uvicorn
 python-dotenv
 python-multipart
 faster-whisper
+piper-tts
