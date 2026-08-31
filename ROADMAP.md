@@ -36,3 +36,6 @@
 - [ ] Kiosk-mode deployment setup
 - [ ] Testing with sample patients
 - [ ] Backup demo video
+
+## Known gaps
+- Hindi Piper voice not yet downloaded - Hindi prompts currently use browser speech synthesis.
