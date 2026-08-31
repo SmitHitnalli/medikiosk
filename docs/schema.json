@@ -1,0 +1,68 @@
+{
+  "patient_id": "string",
+  "session_id": "string",
+  "language": "string",
+  "mode": "general | ayush",
+  "chief_complaint": "string",
+  "hpi": {
+    "site": "string",
+    "onset": "string",
+    "character": "string",
+    "radiation": "string",
+    "associated_symptoms": ["string"],
+    "timing": "string",
+    "exacerbating_relieving": "string",
+    "severity": "string"
+  },
+  "past_medical_history": ["string"],
+  "past_surgical_history": ["string"],
+  "drug_allergy_history": {
+    "current_medications": ["string"],
+    "allergies": ["string"]
+  },
+  "family_history": ["string"],
+  "personal_history": {
+    "diet": "string",
+    "smoking": false,
+    "alcohol": false,
+    "occupation": "string"
+  },
+  "review_of_systems": {},
+  "ayush_assessment": {
+    "prakriti": "string",
+    "vikriti": "string",
+    "agni": "string",
+    "koshtha": "string",
+    "ahara_vihara": "string",
+    "nidana": "string",
+    "samprapti": "string"
+  },
+  "digitized_documents": [
+    {
+      "doc_type": "prescription | lab_report | discharge_summary",
+      "date": "string",
+      "extracted_entities": {
+        "diagnoses": ["string"],
+        "medications": ["string"],
+        "lab_values": [
+          {
+            "name": "string",
+            "value": "string",
+            "unit": "string",
+            "reference_range": "string",
+            "flag": "normal | high | low"
+          }
+        ]
+      }
+    }
+  ],
+  "red_flag": false,
+  "red_flag_reason": "string",
+  "consent": {
+    "abha_id": "string",
+    "consent_given_at": "string",
+    "scope": ["history_capture", "document_sharing", "hospital_share"]
+  },
+  "status": "draft | physician_reviewed | saved_to_emr",
+  "interview_complete": false
+}

@@ -5,8 +5,8 @@
 - [x] AGENTS.md and ROADMAP.md created
 
 ## Next up
-- [ ] Create docs/schema.json
-- [ ] Create docs/conversation_scripts.md
+- [x] Create docs/schema.json
+- [x] Create docs/conversation_scripts.md
 - [ ] Backend skeleton (FastAPI, /health endpoint)
 - [ ] Conversation engine (/chat endpoint using Ollama)
 - [ ] Frontend chat UI
