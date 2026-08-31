@@ -84,16 +84,7 @@ def _get_whisper_model():
     if _whisper_model is None:
         from faster_whisper import WhisperModel
 
-        try:
-            import ctranslate2
-
-            has_gpu = ctranslate2.get_cuda_device_count() > 0
-        except (ImportError, RuntimeError):
-            has_gpu = False
-
-        device = "cuda" if has_gpu else "cpu"
-        compute_type = "float16" if has_gpu else "int8"
-        _whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
+        _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
     return _whisper_model
 
 

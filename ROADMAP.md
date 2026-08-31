@@ -12,6 +12,7 @@
 - [x] Robust Ollama JSON parsing and retry
 - [x] Dashboard safely handles mismatched AI data types
 - [x] Speech-to-text (/transcribe endpoint)
+- [x] CPU-only faster-whisper configuration
 
 ## Next up
 - [x] Create docs/schema.json
