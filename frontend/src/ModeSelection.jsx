@@ -36,7 +36,7 @@ function ModeSelection({ language, onSelect, onBack }) {
         const response = await fetch(SPEAK_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: MODE_PROMPT }),
+          body: JSON.stringify({ text: prompt, language: language || "en" }),
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("Mode prompt unavailable");
