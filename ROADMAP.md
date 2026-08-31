@@ -9,6 +9,7 @@
 - [x] Frontend chat UI
 - [x] Doctor dashboard (fake data first)
 - [x] Connect dashboard to real data
+- [x] Robust Ollama JSON parsing and retry
 
 ## Next up
 - [x] Create docs/schema.json

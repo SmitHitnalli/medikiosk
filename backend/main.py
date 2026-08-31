@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 
 import json
+import re
 import urllib.error
 import urllib.request
 from typing import Literal
@@ -105,13 +106,12 @@ def check_red_flags(message: str) -> bool:
 
 
 def _parse_model_json(content: str) -> dict:
-    cleaned = content.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.removeprefix("```").strip()
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:].strip()
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3].strip()
+    cleaned = re.sub(r"```(?:json)?", "", content, flags=re.IGNORECASE).strip()
+    first_brace = cleaned.find("{")
+    last_brace = cleaned.rfind("}")
+    if first_brace == -1 or last_brace < first_brace:
+        raise HTTPException(status_code=502, detail="Ollama returned invalid JSON")
+    cleaned = cleaned[first_brace : last_brace + 1]
 
     try:
         parsed = json.loads(cleaned)
@@ -126,28 +126,7 @@ def _parse_model_json(content: str) -> dict:
     return parsed
 
 
-@app.post("/chat")
-def chat(request: ChatRequest) -> dict:
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(request.history)
-    messages.append(
-        {
-            "role": "user",
-            "content": f"Current mode: {request.mode}\nPatient's latest message: {request.message}",
-        }
-    )
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": messages,
-        "stream": False,
-    }
-    ollama_request = urllib.request.Request(
-        OLLAMA_URL,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
+def _call_ollama(ollama_request: urllib.request.Request) -> str:
     try:
         with urllib.request.urlopen(ollama_request, timeout=60) as response:
             ollama_response = json.loads(response.read().decode("utf-8"))
@@ -164,7 +143,43 @@ def chat(request: ChatRequest) -> dict:
     content = ollama_response.get("message", {}).get("content")
     if not isinstance(content, str):
         raise HTTPException(status_code=502, detail="Ollama response did not contain message content")
-    result = _parse_model_json(content)
+    return content
+
+
+@app.post("/chat")
+def chat(request: ChatRequest) -> dict:
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(request.history)
+    messages.append(
+        {
+            "role": "user",
+            "content": f"Current mode: {request.mode}\nPatient's latest message: {request.message}",
+        }
+    )
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,
+        "format": "json",
+    }
+    ollama_request = urllib.request.Request(
+        OLLAMA_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    content = _call_ollama(ollama_request)
+    try:
+        result = _parse_model_json(content)
+    except HTTPException as first_error:
+        print(f"[chat] Ollama invalid JSON response (attempt 1): {content!r}", flush=True)
+        retry_content = _call_ollama(ollama_request)
+        try:
+            result = _parse_model_json(retry_content)
+        except HTTPException:
+            print(f"[chat] Ollama invalid JSON response (attempt 2): {retry_content!r}", flush=True)
+            raise first_error
     llm_red_flag = bool(result.get("red_flag", False))
     keyword_red_flag = check_red_flags(request.message)
     if keyword_red_flag or llm_red_flag:
