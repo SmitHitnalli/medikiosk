@@ -8,11 +8,11 @@
 - [x] Red-flag alert feature
 - [x] Frontend chat UI
 - [x] Doctor dashboard (fake data first)
+- [x] Connect dashboard to real data
 
 ## Next up
 - [x] Create docs/schema.json
 - [x] Create docs/conversation_scripts.md
-- [ ] Connect dashboard to real data
 - [ ] Speech-to-text (/transcribe endpoint)
 - [ ] Text-to-speech (/speak endpoint)
 - [ ] OCR endpoint

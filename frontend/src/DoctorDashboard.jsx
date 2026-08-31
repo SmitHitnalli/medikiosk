@@ -32,7 +32,7 @@ const hpiFields = [
   ["Severity", "severity"],
 ];
 
-function ListValue({ items }) {
+function ListValue({ items = [] }) {
   return items.length ? (
     <ul className="dashboard-list">
       {items.map((item) => <li key={item}>{item}</li>)}
@@ -40,9 +40,13 @@ function ListValue({ items }) {
   ) : <span className="muted-value">None recorded</span>;
 }
 
-function DoctorDashboard({ onBack }) {
-  const { hpi, drug_allergy_history: drugHistory, ayush_assessment: ayush } = samplePatient;
-  const hasAyushData = ayush && Object.values(ayush).some(Boolean);
+function DoctorDashboard({ patientData, onBack }) {
+  const patient = patientData || samplePatient;
+  const hpi = patient.hpi || {};
+  const drugHistory = patient.drug_allergy_history || {};
+  const ayush = patient.ayush_assessment || {};
+  const hasAyushData = Object.values(ayush).some(Boolean);
+  const isSample = !patientData;
 
   return (
     <main className="dashboard-shell">
@@ -57,8 +61,8 @@ function DoctorDashboard({ onBack }) {
 
       <section className="chief-complaint-card">
         <div className="section-kicker">Chief complaint</div>
-        <h2>{samplePatient.chief_complaint}</h2>
-        <span className="sample-badge">Sample patient · Draft</span>
+        <h2>{patient.chief_complaint || "No chief complaint recorded"}</h2>
+        <span className="sample-badge">{isSample ? "Sample patient · Draft" : "Live conversation · Ready for review"}</span>
       </section>
 
       <div className="dashboard-grid">

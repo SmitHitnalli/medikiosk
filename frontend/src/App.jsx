@@ -5,6 +5,8 @@ const CHAT_ENDPOINT = "http://localhost:8080/chat";
 
 function App() {
   const [page, setPage] = useState(() => window.location.hash === "#dashboard" ? "dashboard" : "chat");
+  const [interviewData, setInterviewData] = useState(null);
+  const [interviewComplete, setInterviewComplete] = useState(false);
   const [mode, setMode] = useState("general");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([
@@ -68,6 +70,12 @@ function App() {
         ...currentMessages,
         { role: "assistant", content: result.reply },
       ]);
+      if (result.interview_complete) {
+        setInterviewComplete(true);
+        if (result.data && typeof result.data === "object") {
+          setInterviewData(result.data);
+        }
+      }
       if (result.red_flag) {
         setRedFlagReason(result.red_flag_reason || "Urgent symptoms detected");
       }
@@ -79,7 +87,7 @@ function App() {
   }
 
   if (page === "dashboard") {
-    return <DoctorDashboard onBack={() => navigate("chat")} />;
+    return <DoctorDashboard patientData={interviewData} onBack={() => navigate("chat")} />;
   }
 
   return (
@@ -92,7 +100,7 @@ function App() {
             <p className="subtitle">A structured history for your physician to review.</p>
           </div>
           <div className="header-actions">
-            <a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>Doctor dashboard →</a>
+            <a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>{interviewData ? "View live summary →" : "Doctor dashboard →"}</a>
             <div className="mode-control">
               <span className="mode-label">{mode === "general" ? "General mode" : "AYUSH mode"}</span>
               <label className="switch">
@@ -137,6 +145,16 @@ function App() {
             </div>
           )}
         </div>
+
+        {interviewComplete && interviewData && (
+          <div className="completion-card">
+            <div>
+              <strong>Interview complete</strong>
+              <p>The structured summary is ready for physician review.</p>
+            </div>
+            <button type="button" onClick={() => navigate("dashboard")}>View doctor summary →</button>
+          </div>
+        )}
 
         {error && <p className="error-message" role="alert">{error}</p>}
 

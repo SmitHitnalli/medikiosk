@@ -69,6 +69,9 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .composer button { padding: 0 22px; border: 0; border-radius: 12px; color: white; background: #0f766e; cursor: pointer; font-weight: 700; }
 .composer button:disabled { cursor: not-allowed; opacity: .45; }
 .disclaimer { margin: 0; padding: 0 24px 18px; color: #80958f; font-size: 11px; text-align: center; }
+.completion-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 24px 16px; padding: 14px 16px; border: 1px solid #b8dccc; border-radius: 13px; color: #20594e; background: #effaf3; }
+.completion-card strong { font-size: 14px; }.completion-card p { margin: 3px 0 0; color: #5d7f75; font-size: 12px; }
+.completion-card button { padding: 10px 14px; border: 0; border-radius: 9px; color: white; background: #0f766e; cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; }
 
 @media (max-width: 600px) {
   .app-shell { padding: 0; }
@@ -79,6 +82,7 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
   .message-bubble { max-width: 88%; }
   .composer { padding-inline: 16px; }
   .composer button { padding-inline: 16px; }
+  .completion-card { align-items: flex-start; flex-direction: column; margin-inline: 16px; }
 }
 
 .header-actions { display: flex; align-items: center; gap: 24px; }
