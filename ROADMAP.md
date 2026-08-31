@@ -13,7 +13,7 @@
 - [x] Dashboard safely handles mismatched AI data types
 - [x] Speech-to-text endpoint (/transcribe)
 - [x] CPU-only faster-whisper configuration
-- [x] Text-to-speech (/speak endpoint)
+- [x] Text-to-speech endpoint (/speak)
 
 ## Next up
 - [x] Create docs/schema.json
