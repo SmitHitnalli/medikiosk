@@ -1,0 +1,30 @@
+# Environment files and local virtual environments
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Dependency and interpreter caches
+node_modules/
+**/__pycache__/
+**pycache**
+*.py[cod]
+
+# Common secret, credential, and private-key files
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+credentials.json
+credentials.yml
+credentials.yaml
+secrets.json
+secrets.yml
+secrets.yaml
+*_rsa
+*_dsa
+*_ecdsa
+*_ed25519
