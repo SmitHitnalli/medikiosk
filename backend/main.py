@@ -111,6 +111,7 @@ Always respond in this exact JSON format:
 class ChatRequest(BaseModel):
     message: str
     history: list[dict[str, str]] = Field(default_factory=list)
+    data: dict = Field(default_factory=dict)
     language: Literal["en", "hi"] | None = None
     department: str | None = None
     returning_patient: bool = False
@@ -478,8 +479,109 @@ def _normalise_chat_result(result: dict) -> dict:
     data = result.get("data")
     while isinstance(data, dict) and isinstance(data.get("data"), dict):
         data = data["data"]
-    result["data"] = data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        data = {}
+
+    normalised_data = {}
+
+    def assign_nested(target: dict, parts: list[str], value) -> None:
+        current = target
+        for part in parts[:-1]:
+            if not part:
+                continue
+            if not isinstance(current.get(part), dict):
+                current[part] = {}
+            current = current[part]
+        if parts and parts[-1]:
+            current[parts[-1]] = value
+
+    def normalise_fields(source: dict, target: dict) -> None:
+        for key, value in source.items():
+            if not isinstance(key, str):
+                continue
+            parts = key.split(".")
+            if parts[0] == "data":
+                parts = parts[1:]
+            if len(parts) > 1:
+                assign_nested(target, parts, value)
+            else:
+                target[parts[0] if key.startswith("data.") else key] = value
+
+    normalise_fields(data, normalised_data)
+    for nested_key in ("hpi", "ayush_assessment", "drug_allergy_history", "personal_history", "consent"):
+        if isinstance(normalised_data.get(nested_key), dict):
+            nested = {}
+            normalise_fields(normalised_data[nested_key], nested)
+            normalised_data[nested_key] = nested
+    result["data"] = normalised_data
     return result
+
+
+def _value_is_empty(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, dict)):
+        return len(value) == 0
+    return False
+
+
+FIELD_PROMPTS = {
+    "chief_complaint": "the patient's main health concern",
+    "hpi.site": "where they feel the symptom",
+    "hpi.onset": "when the symptom started",
+    "hpi.character": "what the symptom feels like",
+    "hpi.associated_symptoms": "any other symptoms happening along with it",
+    "hpi.timing": "when and how often the symptom occurs",
+    "hpi.exacerbating_relieving": "what makes the symptom worse or better",
+    "hpi.severity": "how severe the symptom is",
+    "ayush_assessment.vikriti": "their current imbalance, or how their health feels different from usual",
+    "ayush_assessment.agni": "their digestion pattern - regular, variable, or sluggish",
+    "ayush_assessment.koshtha": "their usual bowel movement pattern",
+    "ayush_assessment.nidana": "anything that triggers or worsens the problem, such as stress, food, weather, or sleep",
+    "ayush_assessment.panchakarma_history": "whether they have undergone Panchakarma therapies before",
+}
+
+
+def _get_nested_value(data: dict, path: str):
+    current = data
+    for part in path.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _next_field_instruction(data: dict, department: str | None) -> str:
+    fields = [
+        "chief_complaint",
+        "hpi.site",
+        "hpi.onset",
+        "hpi.character",
+        "hpi.associated_symptoms",
+        "hpi.timing",
+        "hpi.exacerbating_relieving",
+        "hpi.severity",
+    ]
+    if (department or "general").strip().lower() != "general":
+        fields.extend([
+            "ayush_assessment.vikriti",
+            "ayush_assessment.agni",
+            "ayush_assessment.koshtha",
+            "ayush_assessment.nidana",
+        ])
+        if (department or "").strip().lower() == "panchakarma":
+            fields.append("ayush_assessment.panchakarma_history")
+
+    for field in fields:
+        if _value_is_empty(_get_nested_value(data, field)):
+            return (
+                f"Your next question must specifically ask about {FIELD_PROMPTS[field]}, "
+                "phrased warmly and naturally, acknowledging what the patient just said first. "
+                "Ask only that one question and do not skip ahead to another field."
+            )
+    return "The required history fields are sufficiently covered. Ask only a brief clarifying question if needed, or wrap up warmly."
 
 
 @app.post("/chat")
@@ -494,6 +596,7 @@ def chat(request: ChatRequest) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": context},
+        {"role": "system", "content": _next_field_instruction(request.data, request.department)},
     ]
     messages.extend(request.history)
     messages.append(

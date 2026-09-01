@@ -28,6 +28,17 @@ function formatLabValue(value) {
   return `${name}: ${reading}${range}${flag}`;
 }
 
+function mergeConversationData(current, next) {
+  if (!next || typeof next !== "object") return current;
+  return {
+    ...current,
+    ...next,
+    hpi: { ...(current.hpi || {}), ...(next.hpi || {}) },
+    ayush_assessment: { ...(current.ayush_assessment || {}), ...(next.ayush_assessment || {}) },
+    drug_allergy_history: { ...(current.drug_allergy_history || {}), ...(next.drug_allergy_history || {}) },
+  };
+}
+
 function StartScreen({ onStart }) {
   return (
     <main className="start-shell">
@@ -60,6 +71,7 @@ function App() {
   const [interactionMode, setInteractionMode] = useState(null);
   const [patientInfo, setPatientInfo] = useState(null);
   const [department, setDepartment] = useState(null);
+  const [conversationData, setConversationData] = useState({});
   const [clearConfirmation, setClearConfirmation] = useState("");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([
@@ -110,6 +122,7 @@ function App() {
     setInteractionMode(null);
     setPatientInfo(null);
     setDepartment(null);
+    setConversationData({});
     setMessage("");
     setRedFlagReason("");
     setOcrResult(null);
@@ -196,6 +209,7 @@ function App() {
         body: JSON.stringify({
           message: trimmedMessage,
           history,
+          data: conversationData,
           language,
           department,
           returning_patient: Boolean(patientInfo?.returning_patient),
@@ -213,11 +227,11 @@ function App() {
         ...currentMessages,
         { role: "assistant", content: result.reply },
       ]);
+      const nextConversationData = mergeConversationData(conversationData, result.data);
+      setConversationData(nextConversationData);
       if (result.interview_complete) {
         setInterviewComplete(true);
-        if (result.data && typeof result.data === "object") {
-          setInterviewData(result.data);
-        }
+        setInterviewData(nextConversationData);
       }
       if (result.red_flag) {
         setRedFlagReason(result.red_flag_reason || "Urgent symptoms detected");

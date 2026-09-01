@@ -31,6 +31,7 @@
 - [x] Department-only AYUSH routing and direct schema-shaped chat data responses
 - [x] Removed legacy chat mode field; department is the sole AYUSH routing input
 - [x] Prioritized immediate Agni/Vikriti questions for AYUSH departments
+- [x] Deterministic per-turn question targeting and server-side chat data structure validation
 - [ ] Guided multi-document scanning with confidence-based fallback chain (fuzzy match -> ask patient -> mark illegible)
 - [ ] Nurse Station live red-flag alert view
 - [ ] Split frontend into frontend-patient/ and frontend-doctor/, staff PIN gate on doctor app
