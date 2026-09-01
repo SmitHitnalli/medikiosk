@@ -4,6 +4,7 @@ import ConsentScreen from "./ConsentScreen";
 import DoctorDashboard from "./DoctorDashboard";
 import LanguageSelection from "./LanguageSelection";
 import ModeSelection from "./ModeSelection";
+import PatientIdentification from "./PatientIdentification";
 import { stopAllAudio } from "./audio";
 
 const CHAT_ENDPOINT = "http://localhost:8080/chat";
@@ -48,12 +49,14 @@ function App() {
     if (window.location.hash === "#language") return "language";
     if (window.location.hash === "#consent") return "consent";
     if (window.location.hash === "#mode") return "mode";
+    if (window.location.hash === "#patient") return "patient";
     return "idle";
   });
   const [interviewData, setInterviewData] = useState(null);
   const [interviewComplete, setInterviewComplete] = useState(false);
   const [language, setLanguage] = useState(null);
   const [interactionMode, setInteractionMode] = useState(null);
+  const [patientInfo, setPatientInfo] = useState(null);
   const [clearConfirmation, setClearConfirmation] = useState("");
   const [mode, setMode] = useState("general");
   const [message, setMessage] = useState("");
@@ -103,6 +106,7 @@ function App() {
     setInterviewComplete(false);
     setLanguage(null);
     setInteractionMode(null);
+    setPatientInfo(null);
     setMode("general");
     setMessage("");
     setRedFlagReason("");
@@ -124,7 +128,7 @@ function App() {
     const handleHashChange = () => {
       stopAllAudio();
       const hash = window.location.hash;
-      setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#consent" ? "consent" : hash === "#mode" ? "mode" : hash === "#chat" ? "chat" : "idle");
+      setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#consent" ? "consent" : hash === "#mode" ? "mode" : hash === "#patient" ? "patient" : hash === "#chat" ? "chat" : "idle");
     };
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
@@ -132,7 +136,7 @@ function App() {
 
   function navigate(nextPage) {
     stopAllAudio();
-    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "consent" ? "consent" : nextPage === "mode" ? "mode" : nextPage === "chat" ? "chat" : "";
+    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "consent" ? "consent" : nextPage === "mode" ? "mode" : nextPage === "patient" ? "patient" : nextPage === "chat" ? "chat" : "";
     setPage(nextPage);
   }
 
@@ -362,7 +366,10 @@ function App() {
     return <ModeSelection language={language} onSelect={(selectedMode) => { setInteractionMode(selectedMode); navigate("consent"); }} onBack={() => navigate("language")} />;
   }
   if (page === "consent") {
-    return <ConsentScreen language={language} interactionMode={interactionMode} onAgree={() => navigate("chat")} onDecline={() => returnToStart(false)} onClearData={() => returnToStart(true)} />;
+    return <ConsentScreen language={language} interactionMode={interactionMode} onAgree={() => navigate("patient")} onDecline={() => returnToStart(false)} onClearData={() => returnToStart(true)} />;
+  }
+  if (page === "patient") {
+    return <PatientIdentification language={language} interactionMode={interactionMode} onComplete={(patient) => { setPatientInfo(patient); navigate("chat"); }} onBack={() => navigate("consent")} onClearData={() => returnToStart(true)} />;
   }
 
   return (

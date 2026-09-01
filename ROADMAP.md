@@ -19,11 +19,12 @@
 - [x] Consent screen with persistent cancel/clear-data option and localized Hindi audio fallback
 - [x] Language selection, mode, and consent screen audio lifecycle and single-playback behavior
 - [x] SQLite patient registry endpoints (Medi ID registration, masked lookup, prakriti update)
+- [x] Patient identification screen with new and returning patient flows
 
 ## Next up (v2 feature plan)
 - [x] Start button / idle screen with session clearing and idle timeout
 - [x] Mode selection (Speak vs Chat, after language selection)
-- [ ] Medi ID system (patients table: medi_id, name, phone, prakriti; non-sequential IDs, lockout after 3 failed attempts, masked phone display)
+- [x] Medi ID system (fully tested: registration, lookup, returning-patient greeting, three-attempt lockout, masked phone display)
 - [ ] Department selection (named departments + 'not sure/general' option)
 - [ ] Rewritten nurse-persona system prompt, AYUSH-default, hard cap at 15-20 exchanges
 - [ ] Guided multi-document scanning with confidence-based fallback chain (fuzzy match -> ask patient -> mark illegible)
