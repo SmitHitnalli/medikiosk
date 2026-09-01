@@ -472,6 +472,14 @@ def _call_ollama(ollama_request: urllib.request.Request) -> str:
     return content
 
 
+def _normalise_chat_result(result: dict) -> dict:
+    data = result.get("data")
+    while isinstance(data, dict) and isinstance(data.get("data"), dict):
+        data = data["data"]
+    result["data"] = data if isinstance(data, dict) else {}
+    return result
+
+
 @app.post("/chat")
 def chat(request: ChatRequest) -> dict:
     context = (
@@ -489,7 +497,7 @@ def chat(request: ChatRequest) -> dict:
     messages.append(
         {
             "role": "user",
-            "content": f"Current language: {request.language or 'en'}\nCurrent mode: {request.mode}\nPatient's latest message: {request.message}",
+            "content": f"Current language: {request.language or 'en'}\nPatient's latest message: {request.message}",
         }
     )
     payload = {
@@ -516,6 +524,7 @@ def chat(request: ChatRequest) -> dict:
         except HTTPException:
             print(f"[chat] Ollama invalid JSON response (attempt 2): {retry_content!r}", flush=True)
             raise first_error
+    result = _normalise_chat_result(result)
     llm_red_flag = bool(result.get("red_flag", False))
     keyword_red_flag = check_red_flags(request.message)
     if keyword_red_flag or llm_red_flag:

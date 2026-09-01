@@ -28,6 +28,7 @@
 - [x] Medi ID system (fully tested: registration, lookup, returning-patient greeting, three-attempt lockout, masked phone display)
 - [x] Department selection (fully tested: named departments, 'not sure/general' option, and mode-respecting audio)
 - [x] Rewritten nurse-persona system prompt, AYUSH-default, hard cap at 15-20 exchanges
+- [x] Department-only AYUSH routing and direct schema-shaped chat data responses
 - [ ] Guided multi-document scanning with confidence-based fallback chain (fuzzy match -> ask patient -> mark illegible)
 - [ ] Nurse Station live red-flag alert view
 - [ ] Split frontend into frontend-patient/ and frontend-doctor/, staff PIN gate on doctor app
