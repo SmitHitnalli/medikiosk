@@ -376,7 +376,7 @@ function App() {
     return <PatientIdentification language={language} interactionMode={interactionMode} onComplete={(patient) => { setPatientInfo(patient); navigate("department"); }} onBack={() => navigate("consent")} onClearData={() => returnToStart(true)} />;
   }
   if (page === "department") {
-    return <DepartmentSelection language={language} onSelect={(selectedDepartment) => { setDepartment(selectedDepartment); navigate("chat"); }} onBack={() => navigate("patient")} onClearData={() => returnToStart(true)} />;
+    return <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(selectedDepartment) => { setDepartment(selectedDepartment); navigate("chat"); }} onBack={() => navigate("patient")} onClearData={() => returnToStart(true)} />;
   }
 
   return (

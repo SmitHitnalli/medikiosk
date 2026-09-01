@@ -26,10 +26,12 @@ function playHindiPlaceholder(text) {
   });
 }
 
-function DepartmentSelection({ language, onSelect, onBack, onClearData }) {
+function DepartmentSelection({ language, interactionMode, onSelect, onBack, onClearData }) {
+  const isSpeakMode = interactionMode === "speak";
   const prompt = DEPARTMENT_PROMPTS[language] || DEPARTMENT_PROMPTS.en;
 
   useEffect(() => {
+    if (!isSpeakMode) return undefined;
     let cancelled = false;
     const controller = new AbortController();
     async function speakPrompt() {
@@ -59,7 +61,7 @@ function DepartmentSelection({ language, onSelect, onBack, onClearData }) {
       controller.abort();
       stopAllAudio();
     };
-  }, [language, prompt]);
+  }, [isSpeakMode, language, prompt]);
 
   return (
     <main className="start-shell">
