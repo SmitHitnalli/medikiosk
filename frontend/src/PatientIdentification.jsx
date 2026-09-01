@@ -212,6 +212,7 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
         name: result.name,
         phone_number: result.phone_number,
         prakriti: result.prakriti,
+        returning_patient: true,
       });
       setStep("welcome");
       if (isSpeakMode) void speakText(`Welcome back, ${result.name}.`, language || "en").catch(() => {});
@@ -230,7 +231,7 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
   }
 
   function finishNewPatient() {
-    onComplete({ medi_id: registeredId, name: name.trim(), phone_number: phoneNumber.trim(), prakriti: null });
+    onComplete({ medi_id: registeredId, name: name.trim(), phone_number: phoneNumber.trim(), prakriti: null, returning_patient: false });
   }
 
   const prompt = PROMPTS[language] || PROMPTS.en;
@@ -275,7 +276,7 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
           {failedAttempts >= 3 && <button className="field-voice-button" type="button" onClick={continueAsNewPatient}>Continue as a new patient</button>}
         </>}
         {step === "welcome" && <>
-          <h1>Welcome back, {welcomeName}</h1>
+        <h1>Welcome back, {welcomeName}</h1>
           <p className="start-copy">Your details have been found. Let’s continue.</p>
           <button className="start-button" type="button" onClick={() => onComplete(foundPatient)}>Continue</button>
         </>}

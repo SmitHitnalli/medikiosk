@@ -200,6 +200,10 @@ function App() {
           history,
           mode,
           language,
+          department,
+          returning_patient: Boolean(patientInfo?.returning_patient),
+          known_prakriti: patientInfo?.prakriti || null,
+          patient_name: patientInfo?.name || null,
         }),
       });
 
