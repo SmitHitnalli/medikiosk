@@ -4,6 +4,9 @@ from fastapi import FastAPI
 import json
 import os
 import re
+import secrets
+import sqlite3
+import string
 import tempfile
 import traceback
 import urllib.error
@@ -21,6 +24,8 @@ from starlette.responses import FileResponse
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "llama3.1:8b"
+DATABASE_PATH = Path(__file__).resolve().parent / "medikiosk.db"
+MEDI_ID_ALPHABET = string.ascii_uppercase + string.digits
 PIPER_VOICE_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx"
 PIPER_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx.json"
 _whisper_model = None
@@ -94,6 +99,51 @@ class SpeakRequest(BaseModel):
     text: str
 
 
+class PatientRegistration(BaseModel):
+    name: str
+    phone_number: str
+
+
+class PrakritiUpdate(BaseModel):
+    prakriti: str | None = None
+
+
+def _init_database() -> None:
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patients (
+                medi_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                phone_number TEXT NOT NULL,
+                prakriti TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.commit()
+
+
+def _mask_phone_number(phone_number: str) -> str:
+    digits = re.sub(r"\D", "", phone_number)
+    if not digits:
+        return "*"
+    return "*" * max(len(digits) - 2, 0) + digits[-2:]
+
+
+def _patient_response(row: sqlite3.Row) -> dict[str, str | None]:
+    return {
+        "medi_id": row["medi_id"],
+        "name": row["name"],
+        "phone_number": _mask_phone_number(row["phone_number"]),
+        "prakriti": row["prakriti"],
+        "created_at": row["created_at"],
+    }
+
+
+_init_database()
+
+
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
@@ -107,6 +157,61 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/patients/register")
+def register_patient(request: PatientRegistration) -> dict[str, str]:
+    name = request.name.strip()
+    phone_number = request.phone_number.strip()
+    if not name or not phone_number:
+        raise HTTPException(status_code=400, detail="Name and phone_number are required")
+
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        for _ in range(10):
+            medi_id = "MK-" + "".join(secrets.choice(MEDI_ID_ALPHABET) for _ in range(6))
+            try:
+                connection.execute(
+                    "INSERT INTO patients (medi_id, name, phone_number) VALUES (?, ?, ?)",
+                    (medi_id, name, phone_number),
+                )
+                connection.commit()
+                return {"medi_id": medi_id}
+            except sqlite3.IntegrityError:
+                continue
+
+    raise HTTPException(status_code=500, detail="Could not generate a unique Medi ID")
+
+
+@app.get("/patients/{medi_id}")
+def get_patient(medi_id: str) -> dict[str, str | None]:
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT medi_id, name, phone_number, prakriti, created_at FROM patients WHERE medi_id = ?",
+            (medi_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    return _patient_response(row)
+
+
+@app.patch("/patients/{medi_id}/prakriti")
+def update_patient_prakriti(medi_id: str, request: PrakritiUpdate) -> dict[str, str | None]:
+    prakriti = request.prakriti.strip() if request.prakriti is not None else None
+    with sqlite3.connect(DATABASE_PATH) as connection:
+        connection.row_factory = sqlite3.Row
+        cursor = connection.execute(
+            "UPDATE patients SET prakriti = ? WHERE medi_id = ?",
+            (prakriti or None, medi_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        connection.commit()
+        row = connection.execute(
+            "SELECT medi_id, name, phone_number, prakriti, created_at FROM patients WHERE medi_id = ?",
+            (medi_id,),
+        ).fetchone()
+    return _patient_response(row)
 
 
 def _get_whisper_model():

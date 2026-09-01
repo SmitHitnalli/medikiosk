@@ -18,6 +18,7 @@
 - [x] Language selection (spoken EN/HI prompt + manual buttons)
 - [x] Consent screen with persistent cancel/clear-data option and localized Hindi audio fallback
 - [x] Language selection, mode, and consent screen audio lifecycle and single-playback behavior
+- [x] SQLite patient registry endpoints (Medi ID registration, masked lookup, prakriti update)
 
 ## Next up (v2 feature plan)
 - [x] Start button / idle screen with session clearing and idle timeout
