@@ -28,15 +28,9 @@ function formatLabValue(value) {
   return `${name}: ${reading}${range}${flag}`;
 }
 
-function mergeConversationData(current, next) {
-  if (!next || typeof next !== "object") return current;
-  return {
-    ...current,
-    ...next,
-    hpi: { ...(current.hpi || {}), ...(next.hpi || {}) },
-    ayush_assessment: { ...(current.ayush_assessment || {}), ...(next.ayush_assessment || {}) },
-    drug_allergy_history: { ...(current.drug_allergy_history || {}), ...(next.drug_allergy_history || {}) },
-  };
+function createSessionId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function StartScreen({ onStart }) {
@@ -71,7 +65,7 @@ function App() {
   const [interactionMode, setInteractionMode] = useState(null);
   const [patientInfo, setPatientInfo] = useState(null);
   const [department, setDepartment] = useState(null);
-  const [conversationData, setConversationData] = useState({});
+  const [sessionId, setSessionId] = useState(createSessionId);
   const [clearConfirmation, setClearConfirmation] = useState("");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([
@@ -122,7 +116,7 @@ function App() {
     setInteractionMode(null);
     setPatientInfo(null);
     setDepartment(null);
-    setConversationData({});
+    setSessionId(createSessionId());
     setMessage("");
     setRedFlagReason("");
     setOcrResult(null);
@@ -209,7 +203,7 @@ function App() {
         body: JSON.stringify({
           message: trimmedMessage,
           history,
-          data: conversationData,
+          session_id: sessionId,
           language,
           department,
           returning_patient: Boolean(patientInfo?.returning_patient),
@@ -227,11 +221,9 @@ function App() {
         ...currentMessages,
         { role: "assistant", content: result.reply },
       ]);
-      const nextConversationData = mergeConversationData(conversationData, result.data);
-      setConversationData(nextConversationData);
       if (result.interview_complete) {
         setInterviewComplete(true);
-        setInterviewData(nextConversationData);
+        setInterviewData(result.data);
       }
       if (result.red_flag) {
         setRedFlagReason(result.red_flag_reason || "Urgent symptoms detected");

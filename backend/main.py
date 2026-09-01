@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 
+import copy
 import json
 import os
 import re
@@ -8,6 +9,7 @@ import secrets
 import sqlite3
 import string
 import tempfile
+import threading
 import traceback
 import urllib.error
 import urllib.request
@@ -31,6 +33,8 @@ PIPER_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-m
 _whisper_model = None
 _piper_voice = None
 _easyocr_reader = None
+_accumulated_data_by_session: dict[str, dict] = {}
+_session_data_lock = threading.Lock()
 OCR_PROMPT = """You extract structured information from OCR text from a patient's prescription, lab report, or discharge summary. Return JSON only.
 
 Extract only these fields, matching the digitized_documents.extracted_entities structure in docs/schema.json:
@@ -111,7 +115,7 @@ Always respond in this exact JSON format:
 class ChatRequest(BaseModel):
     message: str
     history: list[dict[str, str]] = Field(default_factory=list)
-    data: dict = Field(default_factory=dict)
+    session_id: str
     language: Literal["en", "hi"] | None = None
     department: str | None = None
     returning_patient: bool = False
@@ -527,6 +531,25 @@ def _value_is_empty(value) -> bool:
     return False
 
 
+def _merge_accumulated_data(existing: dict, incoming: dict) -> dict:
+    for key, value in incoming.items():
+        if isinstance(value, dict):
+            if not isinstance(existing.get(key), dict):
+                existing[key] = {}
+            _merge_accumulated_data(existing[key], value)
+        elif isinstance(value, list):
+            if _value_is_empty(value):
+                continue
+            if not isinstance(existing.get(key), list):
+                existing[key] = []
+            for item in value:
+                if item not in existing[key]:
+                    existing[key].append(copy.deepcopy(item))
+        elif not _value_is_empty(value) and _value_is_empty(existing.get(key)):
+            existing[key] = copy.deepcopy(value)
+    return existing
+
+
 FIELD_PROMPTS = {
     "chief_complaint": "the patient's main health concern",
     "hpi.site": "where they feel the symptom",
@@ -586,6 +609,11 @@ def _next_field_instruction(data: dict, department: str | None) -> str:
 
 @app.post("/chat")
 def chat(request: ChatRequest) -> dict:
+    session_id = request.session_id.strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    with _session_data_lock:
+        accumulated_data = copy.deepcopy(_accumulated_data_by_session.get(session_id, {}))
     context = (
         "Conversation context for this patient:\n"
         f"department: {request.department or 'general'}\n"
@@ -596,7 +624,7 @@ def chat(request: ChatRequest) -> dict:
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": context},
-        {"role": "system", "content": _next_field_instruction(request.data, request.department)},
+        {"role": "system", "content": _next_field_instruction(accumulated_data, request.department)},
     ]
     messages.extend(request.history)
     messages.append(
@@ -630,6 +658,10 @@ def chat(request: ChatRequest) -> dict:
             print(f"[chat] Ollama invalid JSON response (attempt 2): {retry_content!r}", flush=True)
             raise first_error
     result = _normalise_chat_result(result)
+    with _session_data_lock:
+        accumulated_data = _accumulated_data_by_session.setdefault(session_id, {})
+        _merge_accumulated_data(accumulated_data, result.get("data", {}))
+        result["data"] = copy.deepcopy(accumulated_data)
     llm_red_flag = bool(result.get("red_flag", False))
     keyword_red_flag = check_red_flags(request.message)
     if keyword_red_flag or llm_red_flag:
