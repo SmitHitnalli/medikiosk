@@ -108,7 +108,6 @@ Always respond in this exact JSON format:
 class ChatRequest(BaseModel):
     message: str
     history: list[dict[str, str]] = Field(default_factory=list)
-    mode: Literal["general", "ayush"]
     language: Literal["en", "hi"] | None = None
     department: str | None = None
     returning_patient: bool = False

@@ -61,7 +61,6 @@ function App() {
   const [patientInfo, setPatientInfo] = useState(null);
   const [department, setDepartment] = useState(null);
   const [clearConfirmation, setClearConfirmation] = useState("");
-  const [mode, setMode] = useState("general");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState([
     {
@@ -111,7 +110,6 @@ function App() {
     setInteractionMode(null);
     setPatientInfo(null);
     setDepartment(null);
-    setMode("general");
     setMessage("");
     setRedFlagReason("");
     setOcrResult(null);
@@ -198,7 +196,6 @@ function App() {
         body: JSON.stringify({
           message: trimmedMessage,
           history,
-          mode,
           language,
           department,
           returning_patient: Boolean(patientInfo?.returning_patient),
@@ -395,18 +392,6 @@ function App() {
           <div className="header-actions">
             <ClearDataButton onClearData={() => returnToStart(true)} />
             <a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>{interviewData ? "View live summary →" : "Doctor dashboard →"}</a>
-            <div className="mode-control">
-              <span className="mode-label">{mode === "general" ? "General mode" : "AYUSH mode"}</span>
-              <label className="switch">
-                <input
-                  type="checkbox"
-                  checked={mode === "ayush"}
-                  onChange={(event) => setMode(event.target.checked ? "ayush" : "general")}
-                  aria-label="Toggle General mode and AYUSH mode"
-                />
-                <span className="slider" />
-              </label>
-            </div>
           </div>
         </header>
 
