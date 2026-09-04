@@ -827,13 +827,23 @@ def chat(request: ChatRequest) -> dict:
 
 
 def _record_nurse_station_alert(
-    session_id: str, patient_name: str | None, department: str | None, reason: str
+    session_id: str,
+    patient_name: str | None,
+    department: str | None,
+    reason: str,
+    kind: str = "red_flag",
 ) -> None:
+    # Keyed by session_id + kind (not session_id alone) so a red-flag alert and a
+    # patient-pressed help request for the same session are tracked, shown, and
+    # acknowledged independently instead of one silently overwriting the other.
+    alert_id = f"{session_id}:{kind}"
     with _nurse_station_lock:
-        existing = _nurse_station_alerts.get(session_id)
+        existing = _nurse_station_alerts.get(alert_id)
         still_active = bool(existing and not existing.get("acknowledged"))
-        _nurse_station_alerts[session_id] = {
+        _nurse_station_alerts[alert_id] = {
+            "id": alert_id,
             "session_id": session_id,
+            "kind": kind,
             "patient_name": patient_name or (existing or {}).get("patient_name"),
             "department": department or (existing or {}).get("department"),
             "reason": reason,
@@ -853,12 +863,36 @@ def get_nurse_station_alerts() -> dict:
     return {"alerts": active}
 
 
-@app.post("/nurse-station/alerts/{session_id}/acknowledge")
-def acknowledge_nurse_station_alert(session_id: str) -> dict:
+@app.post("/nurse-station/alerts/{alert_id}/acknowledge")
+def acknowledge_nurse_station_alert(alert_id: str) -> dict:
     with _nurse_station_lock:
-        alert = _nurse_station_alerts.get(session_id)
+        alert = _nurse_station_alerts.get(alert_id)
         if alert is None:
             raise HTTPException(status_code=404, detail="Alert not found")
         alert["acknowledged"] = True
         alert["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
         return dict(alert)
+
+
+class HelpRequest(BaseModel):
+    session_id: str
+    patient_name: str | None = None
+    department: str | None = None
+
+
+@app.post("/nurse-station/help-request")
+def request_help(request: HelpRequest) -> dict:
+    # Patient-initiated call for staff assistance (the kiosk's "help" button, part
+    # of the accessibility baseline) - reuses the same alert feed and acknowledge
+    # flow as red-flag alerts rather than standing up a separate notification path.
+    session_id = request.session_id.strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    _record_nurse_station_alert(
+        session_id=session_id,
+        patient_name=request.patient_name,
+        department=request.department,
+        reason="Patient pressed the help button and is waiting for assistance",
+        kind="help_request",
+    )
+    return {"status": "ok"}

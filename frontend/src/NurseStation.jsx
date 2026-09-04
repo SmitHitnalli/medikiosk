@@ -48,13 +48,13 @@ function NurseStation({ onBack }) {
     };
   }, [fetchAlerts]);
 
-  async function acknowledgeAlert(sessionId) {
-    setAcknowledgingId(sessionId);
+  async function acknowledgeAlert(alertId) {
+    setAcknowledgingId(alertId);
     setError("");
     try {
-      const response = await fetch(`${ALERTS_ENDPOINT}/${sessionId}/acknowledge`, { method: "POST" });
+      const response = await fetch(`${ALERTS_ENDPOINT}/${alertId}/acknowledge`, { method: "POST" });
       if (!response.ok) throw new Error("Could not acknowledge this alert.");
-      setAlerts((current) => current.filter((alert) => alert.session_id !== sessionId));
+      setAlerts((current) => current.filter((alert) => alert.id !== alertId));
     } catch (ackError) {
       setError(ackError.message || "Unable to acknowledge this alert.");
     } finally {
@@ -89,11 +89,16 @@ function NurseStation({ onBack }) {
       ) : (
         <div className="nurse-station-list">
           {alerts.map((alert) => (
-            <section className="dashboard-card nurse-alert-card" key={alert.session_id}>
+            <section
+              className={`dashboard-card nurse-alert-card ${alert.kind === "help_request" ? "nurse-alert-help" : ""}`}
+              key={alert.id}
+            >
               <div className="nurse-alert-heading">
                 <span className="nurse-alert-pulse" aria-hidden="true" />
                 <div>
-                  <p className="section-kicker">{alert.department || "General"}</p>
+                  <p className="section-kicker">
+                    {alert.kind === "help_request" ? "🆘 Help requested" : "🚩 Red flag"} · {alert.department || "General"}
+                  </p>
                   <h2>{alert.patient_name || "Unknown patient"}</h2>
                 </div>
                 <span className="nurse-alert-time">{formatTimeAgo(alert.triggered_at)}</span>
@@ -102,10 +107,10 @@ function NurseStation({ onBack }) {
               <button
                 className="nurse-alert-ack-button"
                 type="button"
-                onClick={() => acknowledgeAlert(alert.session_id)}
-                disabled={acknowledgingId === alert.session_id}
+                onClick={() => acknowledgeAlert(alert.id)}
+                disabled={acknowledgingId === alert.id}
               >
-                {acknowledgingId === alert.session_id ? "Acknowledging..." : "Acknowledge"}
+                {acknowledgingId === alert.id ? "Acknowledging..." : "Acknowledge"}
               </button>
             </section>
           ))}

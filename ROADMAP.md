@@ -42,7 +42,7 @@
 - [x] Performance polish: smaller Whisper model (small -> base), Ollama keep_alive (30m) on /chat and /ocr, OCR image downscaling (cap 1600px long side) - all verified live
 - [x] Voice polish (backend half): /speak now accepts language and is wired for a real Hindi Piper voice; falls back safely to the English voice when Hindi voice files aren't present (verified live)
 - [x] Voice polish (remaining): real hi_IN-pratham-medium Hindi voice downloaded into backend/voices/ (by smit) and verified live (backend correctly loads and synthesizes Devanagari text). Frontend preference flipped in all 5 screens (ConsentScreen, DepartmentSelection, DocumentScanner, ModeSelection, PatientIdentification) to prefer the real Piper voice, with browser speechSynthesis now only a last-resort fallback if Piper playback itself fails.
-- [ ] Accessibility baseline (large fonts, high contrast, big touch targets, repeat button, help button)
+- [x] Accessibility baseline: global text-size (A/A+/A++ via CSS zoom) and high-contrast toggle (persisted in localStorage, applied via data attributes on <html> so it survives page navigation), 44px minimum touch targets on all interactive controls, a repeat button that replays the last spoken prompt from anywhere in the app, and a help button that posts a patient-initiated help request into the same Nurse Station alert feed as red-flag alerts (shown with a distinct amber badge). LanguageSelection.jsx's independent Hindi-audio path was also brought in line with the real Piper voice (was still using the browser-placeholder-first order and stale "known gap" copy).
 - [ ] Graceful failure fallback screens
 - [ ] Mock ABDM/FHIR push endpoint
 - [ ] Kiosk-mode deployment setup

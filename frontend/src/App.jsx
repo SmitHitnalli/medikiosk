@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import AccessibilityBar from "./AccessibilityBar";
 import ClearDataButton from "./ClearDataButton";
 import ConsentScreen from "./ConsentScreen";
 import DoctorDashboard from "./DoctorDashboard";
@@ -338,35 +339,30 @@ function App() {
     }
   }
 
+  let pageContent = null;
+
   if (page === "dashboard" || page === "nurse-station") {
     if (!staffAuthenticated) {
-      return <StaffPinGate onSuccess={() => setStaffAuthenticated(true)} onBack={() => navigate("chat")} />;
+      pageContent = <StaffPinGate onSuccess={() => setStaffAuthenticated(true)} onBack={() => navigate("chat")} />;
+    } else if (page === "nurse-station") {
+      pageContent = <NurseStation onBack={() => navigate("dashboard")} />;
+    } else {
+      pageContent = <DoctorDashboard patientData={interviewData} documents={scannedDocuments} transcript={messages} redFlagEvents={redFlagEvents} department={department} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} onOpenNurseStation={() => navigate("nurse-station")} />;
     }
-    if (page === "nurse-station") {
-      return <NurseStation onBack={() => navigate("dashboard")} />;
-    }
-    return <DoctorDashboard patientData={interviewData} documents={scannedDocuments} transcript={messages} redFlagEvents={redFlagEvents} department={department} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} onOpenNurseStation={() => navigate("nurse-station")} />;
-  }
-  if (page === "idle") {
-    return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
-  }
-  if (page === "language") {
-    return <LanguageSelection onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("mode"); }} onBack={() => navigate("idle")} />;
-  }
-  if (page === "mode") {
-    return <ModeSelection language={language} onSelect={(selectedMode) => { setInteractionMode(selectedMode); navigate("consent"); }} onBack={() => navigate("language")} />;
-  }
-  if (page === "consent") {
-    return <ConsentScreen language={language} interactionMode={interactionMode} onAgree={() => navigate("patient")} onDecline={() => returnToStart(false)} onClearData={() => returnToStart(true)} />;
-  }
-  if (page === "patient") {
-    return <PatientIdentification language={language} interactionMode={interactionMode} onComplete={(patient) => { setPatientInfo(patient); navigate("department"); }} onBack={() => navigate("consent")} onClearData={() => returnToStart(true)} />;
-  }
-  if (page === "department") {
-    return <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(selectedDepartment) => { setDepartment(selectedDepartment); navigate("chat"); }} onBack={() => navigate("patient")} onClearData={() => returnToStart(true)} />;
-  }
-  if (page === "documents") {
-    return (
+  } else if (page === "idle") {
+    pageContent = <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
+  } else if (page === "language") {
+    pageContent = <LanguageSelection onSelect={(selectedLanguage) => { setLanguage(selectedLanguage); navigate("mode"); }} onBack={() => navigate("idle")} />;
+  } else if (page === "mode") {
+    pageContent = <ModeSelection language={language} onSelect={(selectedMode) => { setInteractionMode(selectedMode); navigate("consent"); }} onBack={() => navigate("language")} />;
+  } else if (page === "consent") {
+    pageContent = <ConsentScreen language={language} interactionMode={interactionMode} onAgree={() => navigate("patient")} onDecline={() => returnToStart(false)} onClearData={() => returnToStart(true)} />;
+  } else if (page === "patient") {
+    pageContent = <PatientIdentification language={language} interactionMode={interactionMode} onComplete={(patient) => { setPatientInfo(patient); navigate("department"); }} onBack={() => navigate("consent")} onClearData={() => returnToStart(true)} />;
+  } else if (page === "department") {
+    pageContent = <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(selectedDepartment) => { setDepartment(selectedDepartment); navigate("chat"); }} onBack={() => navigate("patient")} onClearData={() => returnToStart(true)} />;
+  } else if (page === "documents") {
+    pageContent = (
       <DocumentScanner
         language={language}
         interactionMode={interactionMode}
@@ -376,9 +372,8 @@ function App() {
         onClearData={() => returnToStart(true)}
       />
     );
-  }
-
-  return (
+  } else {
+    pageContent = (
     <main className="app-shell">
       <section className="chat-card" aria-label="MediKiosk patient interview">
         <header className="app-header">
@@ -462,6 +457,14 @@ function App() {
         <p className="disclaimer">MediKiosk collects history only. It does not provide a diagnosis or treatment advice.</p>
       </section>
     </main>
+    );
+  }
+
+  return (
+    <>
+      {pageContent}
+      <AccessibilityBar sessionId={sessionId} department={department} patientName={patientInfo?.name} page={page} />
+    </>
   );
 }
 

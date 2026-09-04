@@ -1,4 +1,18 @@
 let activePlayback = null;
+// Remembers the most recently played prompt audio so a global "repeat" control
+// (see AccessibilityBar) can replay it on any screen without each screen having
+// to wire up its own repeat logic. The Blob itself stays valid after playback -
+// only its object URL gets revoked - so it's safe to keep and replay later.
+let lastSpokenBlob = null;
+
+export function hasRepeatableAudio() {
+  return lastSpokenBlob !== null;
+}
+
+export function repeatLastAudio() {
+  if (!lastSpokenBlob) return Promise.resolve();
+  return playAudioBlob(lastSpokenBlob);
+}
 
 export function stopAllAudio() {
   if (activePlayback) {
@@ -14,6 +28,7 @@ export function stopAllAudio() {
 
 export function playAudioBlob(blob) {
   stopAllAudio();
+  lastSpokenBlob = blob;
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);

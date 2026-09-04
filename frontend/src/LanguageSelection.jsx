@@ -6,11 +6,11 @@ const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
 const ENGLISH_PROMPT = "If you want to continue this conversation in English, say English or tap the English button below";
 const HINDI_PROMPT = "Agar aapko baat cheet Hindi mein karni hai to Hindi boliye ya neeche Hindi button dabaiye";
 
-async function requestSpeech(text) {
+async function requestSpeech(text, language) {
   const response = await fetch(SPEAK_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, language }),
   });
   if (!response.ok) throw new Error("Unable to play the language prompt.");
   return response.blob();
@@ -39,24 +39,26 @@ function LanguageSelection({ onSelect, onBack }) {
     let cancelled = false;
     async function playPrompts() {
       try {
-        const englishAudio = await requestSpeech(ENGLISH_PROMPT);
+        const englishAudio = await requestSpeech(ENGLISH_PROMPT, "en");
         if (!cancelled) await playAudioBlob(englishAudio);
       } catch {
         if (!cancelled) setPromptStatus("Choose a language below; the spoken English prompt was unavailable.");
       }
       if (cancelled) return;
       try {
-        const hindiAudio = await requestSpeech(HINDI_PROMPT);
+        const hindiAudio = await requestSpeech(HINDI_PROMPT, "hi");
         if (!cancelled) {
+          // Prefer the real Hindi Piper voice; browser speechSynthesis is now only a
+          // last-resort fallback if Piper audio playback itself fails.
           try {
-            await playHindiPlaceholder(HINDI_PROMPT);
-          } catch {
             await playAudioBlob(hindiAudio);
+          } catch {
+            await playHindiPlaceholder(HINDI_PROMPT);
           }
         }
         if (!cancelled) setPromptStatus("Select English or Hindi, or use the voice button.");
       } catch {
-        if (!cancelled) setPromptStatus("Select English or Hindi, or use the voice button. Hindi voice is a known gap.");
+        if (!cancelled) setPromptStatus("Select English or Hindi, or use the voice button.");
       }
     }
     void playPrompts();
@@ -141,7 +143,6 @@ function LanguageSelection({ onSelect, onBack }) {
         </button>
         {isListening && <p className="recording-status language-recording"><span className="recording-dot" /> Say “English” or “Hindi”</p>}
         {voiceError && <p className="language-error" role="alert">{voiceError}</p>}
-        <p className="known-gap">Hindi voice playback uses a browser placeholder until a Hindi Piper voice is available.</p>
         <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
       </section>
     </main>
