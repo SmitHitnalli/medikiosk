@@ -761,6 +761,14 @@ def chat(request: ChatRequest) -> dict:
         result["red_flag"] = True
         if keyword_red_flag and not result.get("red_flag_reason"):
             result["red_flag_reason"] = "Emergency symptom pattern detected"
+        # Trust-ledger provenance: which system(s) raised this flag. Surfaced on the
+        # doctor dashboard so physicians can see the deterministic safety net is
+        # independent of (and not just trusting) the LLM's own judgement.
+        result["red_flag_source"] = (
+            "keyword_and_ai" if keyword_red_flag and llm_red_flag
+            else "keyword" if keyword_red_flag
+            else "ai"
+        )
         _record_nurse_station_alert(
             session_id=session_id,
             patient_name=request.patient_name,

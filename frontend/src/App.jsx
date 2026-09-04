@@ -64,6 +64,7 @@ function App() {
     },
   ]);
   const [redFlagReason, setRedFlagReason] = useState("");
+  const [redFlagEvents, setRedFlagEvents] = useState([]);
   const [isSending, setIsSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [scannedDocuments, setScannedDocuments] = useState([]);
@@ -107,6 +108,7 @@ function App() {
     setSessionId(createSessionId());
     setMessage("");
     setRedFlagReason("");
+    setRedFlagEvents([]);
     setScannedDocuments([]);
     setError("");
     setIsSending(false);
@@ -213,7 +215,12 @@ function App() {
         setInterviewData(result.data);
       }
       if (result.red_flag) {
-        setRedFlagReason(result.red_flag_reason || "Urgent symptoms detected");
+        const reason = result.red_flag_reason || "Urgent symptoms detected";
+        setRedFlagReason(reason);
+        setRedFlagEvents((currentEvents) => [
+          ...currentEvents,
+          { reason, source: result.red_flag_source || "ai", timestamp: new Date().toISOString() },
+        ]);
       }
     } catch (requestError) {
       setError(requestError.message || "Unable to reach the backend.");
@@ -338,7 +345,7 @@ function App() {
     if (page === "nurse-station") {
       return <NurseStation onBack={() => navigate("dashboard")} />;
     }
-    return <DoctorDashboard patientData={interviewData} documents={scannedDocuments} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} onOpenNurseStation={() => navigate("nurse-station")} />;
+    return <DoctorDashboard patientData={interviewData} documents={scannedDocuments} transcript={messages} redFlagEvents={redFlagEvents} department={department} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} onOpenNurseStation={() => navigate("nurse-station")} />;
   }
   if (page === "idle") {
     return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;

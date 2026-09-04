@@ -43,6 +43,51 @@ const DOC_TYPE_LABELS = {
   discharge_summary: "Discharge summary",
 };
 
+// Mirrors backend FIELD_PROMPTS / _next_field_instruction so the trust ledger's
+// completeness meter reflects exactly what the interview engine tracks.
+const CORE_FIELDS = [
+  ["chief_complaint", "Chief complaint"],
+  ["hpi.site", "Symptom site"],
+  ["hpi.onset", "Onset"],
+  ["hpi.character", "Character"],
+  ["hpi.associated_symptoms", "Associated symptoms"],
+  ["hpi.timing", "Timing"],
+  ["hpi.exacerbating_relieving", "Exacerbating / relieving factors"],
+  ["hpi.severity", "Severity"],
+];
+const AYUSH_FIELDS = [
+  ["ayush_assessment.vikriti", "Vikriti (current imbalance)"],
+  ["ayush_assessment.agni", "Agni (digestion pattern)"],
+  ["ayush_assessment.koshtha", "Koshtha (bowel pattern)"],
+  ["ayush_assessment.nidana", "Nidana (causative factors)"],
+];
+const RED_FLAG_SOURCE_LABELS = {
+  keyword: "Deterministic rule",
+  ai: "AI model",
+  keyword_and_ai: "Deterministic rule + AI model",
+};
+
+function getNestedValue(data, path) {
+  return path.split(".").reduce((current, part) => (current && typeof current === "object" ? current[part] : undefined), data);
+}
+
+function isFieldFilled(value) {
+  if (value == null) return false;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+function formatEventTime(isoString) {
+  if (!isoString) return "";
+  try {
+    return new Date(isoString).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
 function normaliseItems(value) {
   const values = Array.isArray(value) ? value : value == null ? [] : [value];
   return values
@@ -79,13 +124,25 @@ function ListValue({ items }) {
   return <SafeValue value={items} />;
 }
 
-function DoctorDashboard({ patientData, documents, onBack, onClearData, onOpenNurseStation }) {
+function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, department, onBack, onClearData, onOpenNurseStation }) {
   const patient = patientData || samplePatient;
   const hpi = patient.hpi || {};
   const drugHistory = patient.drug_allergy_history || {};
   const ayush = patient.ayush_assessment || {};
   const hasAyushData = Object.values(ayush).some((value) => normaliseItems(value).length > 0);
   const isSample = !patientData;
+  const trackedFields = (department || "").trim().toLowerCase() === "general" ? CORE_FIELDS : [...CORE_FIELDS, ...AYUSH_FIELDS];
+  const filledFields = trackedFields.filter(([path]) => isFieldFilled(getNestedValue(patient, path)));
+  const missingFields = trackedFields.filter(([path]) => !isFieldFilled(getNestedValue(patient, path)));
+  const completenessPct = trackedFields.length ? Math.round((filledFields.length / trackedFields.length) * 100) : 0;
+  const docStatusCounts = (documents || []).reduce(
+    (counts, doc) => {
+      const key = doc.status === "confident" ? "confident" : doc.status === "confirmed" ? "confirmed" : "illegible";
+      counts[key] += 1;
+      return counts;
+    },
+    { confident: 0, confirmed: 0, illegible: 0 }
+  );
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechError, setSpeechError] = useState("");
 
@@ -205,6 +262,69 @@ function DoctorDashboard({ patientData, documents, onBack, onClearData, onOpenNu
             </ul>
           </section>
         )}
+
+        <section className="dashboard-card trust-ledger-card">
+          <div className="card-heading"><div><p className="section-kicker">Trust ledger</p><h2>How this summary was built</h2></div><span className="card-icon">🛈</span></div>
+
+          <div className="trust-metric">
+            <div className="trust-metric-heading">
+              <span>History completeness</span>
+              <span>{filledFields.length} of {trackedFields.length} fields</span>
+            </div>
+            <div className="trust-metric-bar"><div className="trust-metric-bar-fill" style={{ width: `${completenessPct}%` }} /></div>
+            {missingFields.length > 0 && (
+              <p className="trust-metric-note">Not yet captured: {missingFields.map(([, label]) => label).join(", ")}</p>
+            )}
+          </div>
+
+          <div className="trust-subsection">
+            <p className="trust-subsection-heading">Red-flag audit</p>
+            {redFlagEvents && redFlagEvents.length > 0 ? (
+              <ul className="trust-flag-list">
+                {redFlagEvents.map((event, index) => (
+                  <li className="trust-flag-item" key={`${event.timestamp}-${index}`}>
+                    <span className="trust-flag-reason">{event.reason}</span>
+                    <span className="trust-flag-meta">
+                      <span className="trust-flag-source">{RED_FLAG_SOURCE_LABELS[event.source] || "AI model"}</span>
+                      {formatEventTime(event.timestamp) && <span className="trust-flag-time">{formatEventTime(event.timestamp)}</span>}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="trust-metric-note">No red flags raised during this interview.</p>
+            )}
+          </div>
+
+          {documents && documents.length > 0 && (
+            <div className="trust-subsection">
+              <p className="trust-subsection-heading">Document verification</p>
+              <p className="trust-metric-note">
+                {docStatusCounts.confident > 0 && `${docStatusCounts.confident} AI-identified`}
+                {docStatusCounts.confident > 0 && (docStatusCounts.confirmed > 0 || docStatusCounts.illegible > 0) && " · "}
+                {docStatusCounts.confirmed > 0 && `${docStatusCounts.confirmed} patient-corrected`}
+                {docStatusCounts.confirmed > 0 && docStatusCounts.illegible > 0 && " · "}
+                {docStatusCounts.illegible > 0 && `${docStatusCounts.illegible} unreadable`}
+              </p>
+            </div>
+          )}
+        </section>
+
+        <section className="dashboard-card transcript-card">
+          <div className="card-heading"><div><p className="section-kicker">Full record</p><h2>Conversation transcript</h2></div><span className="card-icon">≡</span></div>
+          {transcript && transcript.length > 0 ? (
+            <div className="dashboard-transcript-list">
+              {transcript.map((entry, index) => (
+                <div className={`dashboard-transcript-row ${entry.role}`} key={`${entry.role}-${index}`}>
+                  <span className="dashboard-transcript-author">{entry.role === "user" ? "Patient" : "MediKiosk"}</span>
+                  <p className="dashboard-transcript-bubble">{entry.content}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted-value">No conversation recorded yet.</p>
+          )}
+        </section>
       </div>
       <p className="dashboard-footnote">This summary is collected history, not a diagnosis. Confirm details with the patient.</p>
     </main>

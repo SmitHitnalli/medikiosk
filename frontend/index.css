@@ -245,3 +245,29 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .staff-pin-form button:disabled { cursor: not-allowed; opacity: .45; }
 .staff-pin-error { margin: 16px 0 0; text-align: center; }
 .staff-pin-back { margin-top: 20px; }
+
+.trust-ledger-card, .transcript-card { grid-column: 1 / -1; }
+.trust-metric { margin-bottom: 20px; }
+.trust-metric-heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; color: #284b48; font-size: 13px; font-weight: 700; }
+.trust-metric-bar { height: 8px; border-radius: 999px; overflow: hidden; background: #e4eee9; }
+.trust-metric-bar-fill { height: 100%; border-radius: 999px; background: #0f766e; transition: width .3s ease; }
+.trust-metric-note { margin: 8px 0 0; color: #6a8580; font-size: 12.5px; line-height: 1.5; }
+.trust-subsection { margin-top: 18px; padding-top: 18px; border-top: 1px solid #e4eee9; }
+.trust-subsection-heading { margin: 0 0 10px; color: #78908a; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.trust-flag-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.trust-flag-item { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border: 1px solid #f2d9a6; border-radius: 10px; background: #fdf6e5; }
+.trust-flag-reason { color: #6b4a10; font-size: 13px; font-weight: 600; }
+.trust-flag-meta { display: flex; align-items: center; gap: 10px; }
+.trust-flag-source { padding: 3px 8px; border-radius: 999px; color: #8a5b18; background: #f9edd0; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.trust-flag-time { color: #92a39d; font-size: 11px; }
+
+.dashboard-transcript-list { display: flex; flex-direction: column; gap: 12px; max-height: 420px; overflow-y: auto; padding-right: 4px; }
+.dashboard-transcript-row { display: flex; flex-direction: column; max-width: 82%; }
+.dashboard-transcript-row.user { align-self: flex-end; align-items: flex-end; }
+.dashboard-transcript-author { margin-bottom: 3px; color: #78908a; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.dashboard-transcript-bubble { margin: 0; padding: 10px 14px; border-radius: 14px 14px 14px 4px; color: #284b48; background: #edf5f1; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; }
+.dashboard-transcript-row.user .dashboard-transcript-bubble { border-radius: 14px 14px 4px 14px; color: #fff; background: #0f766e; }
+
+@media (max-width: 600px) {
+  .dashboard-transcript-row { max-width: 92%; }
+}
