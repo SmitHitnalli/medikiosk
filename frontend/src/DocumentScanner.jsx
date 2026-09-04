@@ -70,7 +70,9 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
         if (!cancelled) {
           const audioBlob = await response.blob();
           if (language === "hi") {
-            try { await playHindiPlaceholder(prompt); } catch { await playAudioBlob(audioBlob); }
+            // Prefer the real Hindi Piper voice; browser speechSynthesis is now
+            // only a last-resort fallback if Piper audio playback itself fails.
+            try { await playAudioBlob(audioBlob); } catch { await playHindiPlaceholder(prompt); }
           } else {
             await playAudioBlob(audioBlob);
           }

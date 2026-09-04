@@ -31,15 +31,15 @@ async function speakText(text, language) {
   });
   if (!response.ok) throw new Error("The spoken prompt was unavailable.");
   const blob = await response.blob();
-  if (language === "hi") {
-    try {
+  try {
+    await playAudioBlob(blob);
+  } catch {
+    if (language === "hi") {
+      // Real Hindi Piper voice failed to play - fall back to the browser's own
+      // speechSynthesis rather than staying silent.
       await playHindiPlaceholder(text);
-      return;
-    } catch {
-      // Fall through to the English Piper voice as a final fallback.
     }
   }
-  await playAudioBlob(blob);
 }
 
 function PatientIdentification({ language, interactionMode, onComplete, onBack, onClearData }) {
@@ -78,7 +78,9 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
         if (!cancelled) {
           const blob = await response.blob();
           if (language === "hi") {
-            try { await playHindiPlaceholder(text); } catch { await playAudioBlob(blob); }
+            // Prefer the real Hindi Piper voice; browser speechSynthesis is now
+            // only a last-resort fallback if Piper audio playback itself fails.
+            try { await playAudioBlob(blob); } catch { await playHindiPlaceholder(text); }
           } else {
             await playAudioBlob(blob);
           }

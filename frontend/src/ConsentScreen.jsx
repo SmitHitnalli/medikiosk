@@ -45,10 +45,12 @@ function ConsentScreen({ language, interactionMode, onAgree, onDecline, onClearD
         if (!response.ok) throw new Error("Consent prompt unavailable");
         const audioBlob = await response.blob();
         if (language === "hi") {
+          // Prefer the real Hindi Piper voice; browser speechSynthesis is now only
+          // a last-resort fallback if playback of the Piper audio itself fails.
           try {
-            await playHindiPlaceholder(prompt);
-          } catch {
             await playAudioBlob(audioBlob);
+          } catch {
+            await playHindiPlaceholder(prompt);
           }
         } else {
           await playAudioBlob(audioBlob);

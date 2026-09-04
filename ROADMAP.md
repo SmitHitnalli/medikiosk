@@ -41,7 +41,7 @@
 - [x] Session data clearing confirmation UI (confirm dialog before wiping session data, self-contained in ClearDataButton so every screen picked it up automatically)
 - [x] Performance polish: smaller Whisper model (small -> base), Ollama keep_alive (30m) on /chat and /ocr, OCR image downscaling (cap 1600px long side) - all verified live
 - [x] Voice polish (backend half): /speak now accepts language and is wired for a real Hindi Piper voice; falls back safely to the English voice when Hindi voice files aren't present (verified live)
-- [ ] Voice polish (remaining): download hi_IN-pratham-medium.onnx + .onnx.json from https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/hi/hi_IN/pratham/medium into backend/voices/, then flip the frontend's Hindi audio preference (currently browser speechSynthesis first, Piper as fallback - see ConsentScreen.jsx/DepartmentSelection.jsx/DocumentScanner.jsx/ModeSelection.jsx/PatientIdentification.jsx) to prefer the real Piper voice once it's in place
+- [x] Voice polish (remaining): real hi_IN-pratham-medium Hindi voice downloaded into backend/voices/ (by smit) and verified live (backend correctly loads and synthesizes Devanagari text). Frontend preference flipped in all 5 screens (ConsentScreen, DepartmentSelection, DocumentScanner, ModeSelection, PatientIdentification) to prefer the real Piper voice, with browser speechSynthesis now only a last-resort fallback if Piper playback itself fails.
 - [ ] Accessibility baseline (large fonts, high contrast, big touch targets, repeat button, help button)
 - [ ] Graceful failure fallback screens
 - [ ] Mock ABDM/FHIR push endpoint
@@ -50,4 +50,4 @@
 - [ ] Backup demo video
 
 ## Known gaps
-- All Hindi audio currently uses browser speechSynthesis as a workaround; a real Hindi Piper voice should be downloaded and integrated during the voice polish step.
+- (Resolved) Hindi audio now uses a real Piper voice (hi_IN-pratham-medium); browser speechSynthesis is a last-resort fallback only.
