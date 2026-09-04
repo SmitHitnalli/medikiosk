@@ -26,6 +26,7 @@ from starlette.responses import FileResponse
 
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+from PIL import Image
 
 load_dotenv()
 
@@ -35,10 +36,17 @@ DATABASE_PATH = Path(__file__).resolve().parent / "medikiosk.db"
 MEDI_ID_ALPHABET = string.ascii_uppercase + string.digits
 PIPER_VOICE_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx"
 PIPER_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx.json"
+# Real Hindi Piper voice, not yet downloaded into this repo (network-restricted dev
+# environment could not fetch it). Drop these two files from
+# https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/hi/hi_IN/pratham/medium
+# into backend/voices/ and Hindi /speak requests pick it up automatically - no code
+# change needed. Until then, /speak falls back to the English voice for Hindi text.
+PIPER_HINDI_VOICE_PATH = Path(__file__).resolve().parent / "voices" / "hi_IN-pratham-medium.onnx"
+PIPER_HINDI_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "hi_IN-pratham-medium.onnx.json"
 # Hackathon-simple shared staff PIN, not per-user auth. Set STAFF_PIN in backend/.env to change it.
 STAFF_PIN = os.environ.get("STAFF_PIN", "1234")
 _whisper_model = None
-_piper_voice = None
+_piper_voices: dict[str, object] = {}
 _easyocr_reader = None
 _accumulated_data_by_session: dict[str, dict] = {}
 _session_data_lock = threading.Lock()
@@ -82,6 +90,10 @@ DOC_TYPE_KEYWORDS = {
 OCR_CONFIDENT_THRESHOLD = 0.55
 OCR_ILLEGIBLE_THRESHOLD = 0.2
 DOC_TYPE_CONFIDENT_THRESHOLD = 0.15
+# Phone-camera photos routinely come in at 3000-4000px+ on the long side, which
+# slows EasyOCR for no accuracy benefit at document-text scale. Cap the long side
+# before running OCR.
+OCR_MAX_IMAGE_DIMENSION = 1600
 SYSTEM_PROMPT = """You are Nurse Anjali, a warm, experienced clinical intake assistant at an AYUSH hospital in India. You are NOT a diagnostic tool - you only gather and organize a patient's history for the physician to review. You never diagnose, suggest treatment, or name a likely condition.
 
 PERSONA AND TONE:
@@ -154,6 +166,7 @@ class ChatRequest(BaseModel):
 
 class SpeakRequest(BaseModel):
     text: str
+    language: Literal["en", "hi"] | None = None
 
 
 class PatientRegistration(BaseModel):
@@ -287,7 +300,7 @@ def _get_whisper_model():
     if _whisper_model is None:
         from faster_whisper import WhisperModel
 
-        _whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
+        _whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
     return _whisper_model
 
 
@@ -356,6 +369,23 @@ def _classify_document_type(extracted_text: str) -> tuple[str | None, float]:
     return (best_type, round(best_score, 2)) if best_score > 0 else (None, 0.0)
 
 
+def _downscale_image_for_ocr(path: str) -> None:
+    """Resize the image in place if its longer side exceeds OCR_MAX_IMAGE_DIMENSION.
+    Best-effort: if the file can't be opened as an image, leave it untouched and let
+    EasyOCR itself raise/report the problem."""
+    try:
+        with Image.open(path) as image:
+            longer_side = max(image.size)
+            if longer_side <= OCR_MAX_IMAGE_DIMENSION:
+                return
+            scale = OCR_MAX_IMAGE_DIMENSION / longer_side
+            new_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+            resized = image.convert("RGB").resize(new_size, Image.LANCZOS)
+            resized.save(path)
+    except Exception:
+        traceback.print_exc()
+
+
 @app.post("/ocr")
 async def ocr(file: UploadFile = File(...), doc_type_hint: str | None = Form(None)) -> dict:
     image_data = await file.read()
@@ -368,6 +398,8 @@ async def ocr(file: UploadFile = File(...), doc_type_hint: str | None = Form(Non
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(image_data)
             temp_path = temp_file.name
+
+        _downscale_image_for_ocr(temp_path)
 
         reader = _get_easyocr_reader()
         ocr_results = reader.readtext(temp_path, detail=1)
@@ -413,6 +445,9 @@ async def ocr(file: UploadFile = File(...), doc_type_hint: str | None = Form(Non
                     ],
                     "stream": False,
                     "format": "json",
+                    # Keep the model resident between requests - avoids a multi-second
+                    # reload on every OCR/chat call during a demo/testing session.
+                    "keep_alive": "30m",
                 }
             ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
@@ -453,13 +488,22 @@ async def ocr(file: UploadFile = File(...), doc_type_hint: str | None = Form(Non
                 pass
 
 
-def _get_piper_voice():
-    global _piper_voice
-    if _piper_voice is None:
-        from piper import PiperVoice
+def _get_piper_voice(language: str | None = None):
+    """Load (and cache) the Piper voice for the given language. Falls back to the
+    English voice - rather than erroring - when a Hindi voice is requested but its
+    files aren't present, since partial/no audio is worse than the wrong accent for
+    a kiosk demo."""
+    from piper import PiperVoice
 
-        _piper_voice = PiperVoice.load(PIPER_VOICE_PATH, config_path=PIPER_CONFIG_PATH)
-    return _piper_voice
+    use_hindi = language == "hi" and PIPER_HINDI_VOICE_PATH.exists() and PIPER_HINDI_CONFIG_PATH.exists()
+    cache_key = "hi" if use_hindi else "en"
+
+    if cache_key not in _piper_voices:
+        if use_hindi:
+            _piper_voices[cache_key] = PiperVoice.load(PIPER_HINDI_VOICE_PATH, config_path=PIPER_HINDI_CONFIG_PATH)
+        else:
+            _piper_voices[cache_key] = PiperVoice.load(PIPER_VOICE_PATH, config_path=PIPER_CONFIG_PATH)
+    return _piper_voices[cache_key]
 
 
 @app.post("/speak")
@@ -470,7 +514,7 @@ def speak(request: SpeakRequest) -> FileResponse:
 
     temp_path = None
     try:
-        voice = _get_piper_voice()
+        voice = _get_piper_voice(request.language)
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
             temp_path = temp_file.name
         with wave.open(temp_path, "wb") as wav_file:
@@ -731,6 +775,10 @@ def chat(request: ChatRequest) -> dict:
         "messages": messages,
         "stream": False,
         "format": "json",
+        # Keep the model resident between requests - avoids a multi-second reload
+        # on every chat turn (the biggest single latency win available without
+        # swapping to a smaller LLM).
+        "keep_alive": "30m",
     }
     ollama_request = urllib.request.Request(
         OLLAMA_URL,

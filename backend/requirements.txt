@@ -5,3 +5,4 @@ python-multipart
 faster-whisper
 piper-tts
 easyocr
+pillow
