@@ -8,6 +8,7 @@ import NurseStation from "./NurseStation";
 import ModeSelection from "./ModeSelection";
 import PatientIdentification from "./PatientIdentification";
 import DepartmentSelection from "./DepartmentSelection";
+import StaffPinGate from "./StaffPinGate";
 import { stopAllAudio } from "./audio";
 
 const CHAT_ENDPOINT = "http://localhost:8080/chat";
@@ -66,6 +67,7 @@ function App() {
   const [isSending, setIsSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [scannedDocuments, setScannedDocuments] = useState([]);
+  const [staffAuthenticated, setStaffAuthenticated] = useState(false);
   const [error, setError] = useState("");
   const messageListRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -329,11 +331,14 @@ function App() {
     }
   }
 
-  if (page === "dashboard") {
+  if (page === "dashboard" || page === "nurse-station") {
+    if (!staffAuthenticated) {
+      return <StaffPinGate onSuccess={() => setStaffAuthenticated(true)} onBack={() => navigate("chat")} />;
+    }
+    if (page === "nurse-station") {
+      return <NurseStation onBack={() => navigate("dashboard")} />;
+    }
     return <DoctorDashboard patientData={interviewData} documents={scannedDocuments} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} onOpenNurseStation={() => navigate("nurse-station")} />;
-  }
-  if (page === "nurse-station") {
-    return <NurseStation onBack={() => navigate("dashboard")} />;
   }
   if (page === "idle") {
     return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;

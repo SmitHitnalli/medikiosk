@@ -233,3 +233,15 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
   .nurse-alert-heading { flex-wrap: wrap; }
   .nurse-alert-time { margin-left: 0; }
 }
+
+.staff-pin-shell { display: grid; place-items: center; min-height: calc(100vh - 44px); }
+.staff-pin-card { max-width: 420px; margin: 0; text-align: center; }
+.staff-pin-heading { margin: 10px 0 0; color: #173b3c; font-family: "Space Grotesk", sans-serif; font-size: 28px; }
+.staff-pin-copy { margin: 8px 0 0; color: #6a8580; font-size: 14px; }
+.staff-pin-form { display: grid; gap: 12px; margin-top: 24px; }
+.staff-pin-form input { width: 100%; min-height: 56px; padding: 0 16px; border: 1px solid #cbded7; border-radius: 12px; outline: none; color: #173b3c; background: #fff; font-size: 22px; text-align: center; letter-spacing: .3em; }
+.staff-pin-form input:focus { border-color: #0f766e; box-shadow: 0 0 0 3px #0f766e1c; }
+.staff-pin-form button { min-height: 50px; border: 0; border-radius: 12px; color: white; background: #0f766e; cursor: pointer; font-weight: 700; font-size: 15px; }
+.staff-pin-form button:disabled { cursor: not-allowed; opacity: .45; }
+.staff-pin-error { margin: 16px 0 0; text-align: center; }
+.staff-pin-back { margin-top: 20px; }

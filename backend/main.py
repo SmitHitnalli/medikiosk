@@ -25,7 +25,9 @@ from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
 
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 
+load_dotenv()
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "llama3.1:8b"
@@ -33,6 +35,8 @@ DATABASE_PATH = Path(__file__).resolve().parent / "medikiosk.db"
 MEDI_ID_ALPHABET = string.ascii_uppercase + string.digits
 PIPER_VOICE_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx"
 PIPER_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx.json"
+# Hackathon-simple shared staff PIN, not per-user auth. Set STAFF_PIN in backend/.env to change it.
+STAFF_PIN = os.environ.get("STAFF_PIN", "1234")
 _whisper_model = None
 _piper_voice = None
 _easyocr_reader = None
@@ -161,6 +165,10 @@ class PrakritiUpdate(BaseModel):
     prakriti: str | None = None
 
 
+class StaffPinRequest(BaseModel):
+    pin: str
+
+
 def _init_database() -> None:
     with sqlite3.connect(DATABASE_PATH) as connection:
         connection.execute(
@@ -210,6 +218,13 @@ app.add_middleware(
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/staff/verify-pin")
+def verify_staff_pin(request: StaffPinRequest) -> dict[str, bool]:
+    if request.pin.strip() != STAFF_PIN:
+        raise HTTPException(status_code=401, detail="Incorrect PIN")
+    return {"ok": True}
 
 
 @app.post("/patients/register")

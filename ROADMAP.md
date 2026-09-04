@@ -35,7 +35,8 @@
 - [x] Backend session-scoped data accumulation and non-destructive field merging
 - [x] Guided multi-document scanning with confidence-based fallback chain (fuzzy match -> ask patient -> mark illegible)
 - [x] Nurse Station live red-flag alert view
-- [ ] Split frontend into frontend-patient/ and frontend-doctor/, staff PIN gate on doctor app
+- [x] Staff PIN gate on doctor dashboard + Nurse Station (server-verified via STAFF_PIN in backend/.env, default 1234)
+- [ ] Split frontend into frontend-patient/ and frontend-doctor/ (deferred: bigger/riskier restructure, no functional benefit beyond deployment packaging - single Vite app works fine for the demo)
 - [ ] Doctor dashboard: transcript view + trust ledger
 - [ ] Session data clearing confirmation UI
 - [ ] Voice polish (alternate Piper voice) and performance polish (smaller Whisper model, Ollama keep-alive, image downscaling)
