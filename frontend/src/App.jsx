@@ -4,6 +4,7 @@ import ConsentScreen from "./ConsentScreen";
 import DoctorDashboard from "./DoctorDashboard";
 import DocumentScanner from "./DocumentScanner";
 import LanguageSelection from "./LanguageSelection";
+import NurseStation from "./NurseStation";
 import ModeSelection from "./ModeSelection";
 import PatientIdentification from "./PatientIdentification";
 import DepartmentSelection from "./DepartmentSelection";
@@ -36,6 +37,7 @@ function StartScreen({ onStart }) {
 function App() {
   const [page, setPage] = useState(() => {
     if (window.location.hash === "#dashboard") return "dashboard";
+    if (window.location.hash === "#nurse-station") return "nurse-station";
     if (window.location.hash === "#chat") return "chat";
     if (window.location.hash === "#documents") return "documents";
     if (window.location.hash === "#language") return "language";
@@ -120,7 +122,7 @@ function App() {
     const handleHashChange = () => {
       stopAllAudio();
       const hash = window.location.hash;
-      setPage(hash === "#dashboard" ? "dashboard" : hash === "#documents" ? "documents" : hash === "#language" ? "language" : hash === "#consent" ? "consent" : hash === "#mode" ? "mode" : hash === "#patient" ? "patient" : hash === "#department" ? "department" : hash === "#chat" ? "chat" : "idle");
+      setPage(hash === "#dashboard" ? "dashboard" : hash === "#nurse-station" ? "nurse-station" : hash === "#documents" ? "documents" : hash === "#language" ? "language" : hash === "#consent" ? "consent" : hash === "#mode" ? "mode" : hash === "#patient" ? "patient" : hash === "#department" ? "department" : hash === "#chat" ? "chat" : "idle");
     };
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
@@ -128,7 +130,7 @@ function App() {
 
   function navigate(nextPage) {
     stopAllAudio();
-    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "documents" ? "documents" : nextPage === "language" ? "language" : nextPage === "consent" ? "consent" : nextPage === "mode" ? "mode" : nextPage === "patient" ? "patient" : nextPage === "department" ? "department" : nextPage === "chat" ? "chat" : "";
+    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "nurse-station" ? "nurse-station" : nextPage === "documents" ? "documents" : nextPage === "language" ? "language" : nextPage === "consent" ? "consent" : nextPage === "mode" ? "mode" : nextPage === "patient" ? "patient" : nextPage === "department" ? "department" : nextPage === "chat" ? "chat" : "";
     setPage(nextPage);
   }
 
@@ -328,7 +330,10 @@ function App() {
   }
 
   if (page === "dashboard") {
-    return <DoctorDashboard patientData={interviewData} documents={scannedDocuments} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} />;
+    return <DoctorDashboard patientData={interviewData} documents={scannedDocuments} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} onOpenNurseStation={() => navigate("nurse-station")} />;
+  }
+  if (page === "nurse-station") {
+    return <NurseStation onBack={() => navigate("dashboard")} />;
   }
   if (page === "idle") {
     return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;

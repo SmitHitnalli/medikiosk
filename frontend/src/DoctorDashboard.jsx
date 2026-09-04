@@ -79,7 +79,7 @@ function ListValue({ items }) {
   return <SafeValue value={items} />;
 }
 
-function DoctorDashboard({ patientData, documents, onBack, onClearData }) {
+function DoctorDashboard({ patientData, documents, onBack, onClearData, onOpenNurseStation }) {
   const patient = patientData || samplePatient;
   const hpi = patient.hpi || {};
   const drugHistory = patient.drug_allergy_history || {};
@@ -122,6 +122,7 @@ function DoctorDashboard({ patientData, documents, onBack, onClearData }) {
         </div>
         <div className="dashboard-actions">
           <ClearDataButton onClearData={onClearData} />
+          <button className="nurse-station-link" type="button" onClick={onOpenNurseStation}>Nurse Station →</button>
           <button className="back-link" type="button" onClick={onBack}>← Back to interview</button>
         </div>
       </header>

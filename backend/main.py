@@ -24,6 +24,8 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
 
+from datetime import datetime, timezone
+
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "llama3.1:8b"
@@ -36,6 +38,8 @@ _piper_voice = None
 _easyocr_reader = None
 _accumulated_data_by_session: dict[str, dict] = {}
 _session_data_lock = threading.Lock()
+_nurse_station_alerts: dict[str, dict] = {}
+_nurse_station_lock = threading.Lock()
 OCR_PROMPT = """You extract structured information from OCR text from a patient's prescription, lab report, or discharge summary. Return JSON only.
 
 Extract only these fields, matching the digitized_documents.extracted_entities structure in docs/schema.json:
@@ -742,4 +746,48 @@ def chat(request: ChatRequest) -> dict:
         result["red_flag"] = True
         if keyword_red_flag and not result.get("red_flag_reason"):
             result["red_flag_reason"] = "Emergency symptom pattern detected"
+        _record_nurse_station_alert(
+            session_id=session_id,
+            patient_name=request.patient_name,
+            department=request.department,
+            reason=result.get("red_flag_reason") or "Urgent symptoms detected",
+        )
     return result
+
+
+def _record_nurse_station_alert(
+    session_id: str, patient_name: str | None, department: str | None, reason: str
+) -> None:
+    with _nurse_station_lock:
+        existing = _nurse_station_alerts.get(session_id)
+        still_active = bool(existing and not existing.get("acknowledged"))
+        _nurse_station_alerts[session_id] = {
+            "session_id": session_id,
+            "patient_name": patient_name or (existing or {}).get("patient_name"),
+            "department": department or (existing or {}).get("department"),
+            "reason": reason,
+            "triggered_at": (
+                existing["triggered_at"] if still_active else datetime.now(timezone.utc).isoformat()
+            ),
+            "acknowledged": False,
+            "acknowledged_at": None,
+        }
+
+
+@app.get("/nurse-station/alerts")
+def get_nurse_station_alerts() -> dict:
+    with _nurse_station_lock:
+        active = [dict(alert) for alert in _nurse_station_alerts.values() if not alert["acknowledged"]]
+    active.sort(key=lambda alert: alert["triggered_at"])
+    return {"alerts": active}
+
+
+@app.post("/nurse-station/alerts/{session_id}/acknowledge")
+def acknowledge_nurse_station_alert(session_id: str) -> dict:
+    with _nurse_station_lock:
+        alert = _nurse_station_alerts.get(session_id)
+        if alert is None:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        alert["acknowledged"] = True
+        alert["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
+        return dict(alert)

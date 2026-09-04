@@ -34,7 +34,7 @@
 - [x] Deterministic per-turn question targeting and server-side chat data structure validation
 - [x] Backend session-scoped data accumulation and non-destructive field merging
 - [x] Guided multi-document scanning with confidence-based fallback chain (fuzzy match -> ask patient -> mark illegible)
-- [ ] Nurse Station live red-flag alert view
+- [x] Nurse Station live red-flag alert view
 - [ ] Split frontend into frontend-patient/ and frontend-doctor/, staff PIN gate on doctor app
 - [ ] Doctor dashboard: transcript view + trust ledger
 - [ ] Session data clearing confirmation UI
