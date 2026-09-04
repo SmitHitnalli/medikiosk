@@ -33,7 +33,7 @@
 - [x] Prioritized immediate Agni/Vikriti questions for AYUSH departments
 - [x] Deterministic per-turn question targeting and server-side chat data structure validation
 - [x] Backend session-scoped data accumulation and non-destructive field merging
-- [ ] Guided multi-document scanning with confidence-based fallback chain (fuzzy match -> ask patient -> mark illegible)
+- [x] Guided multi-document scanning with confidence-based fallback chain (fuzzy match -> ask patient -> mark illegible)
 - [ ] Nurse Station live red-flag alert view
 - [ ] Split frontend into frontend-patient/ and frontend-doctor/, staff PIN gate on doctor app
 - [ ] Doctor dashboard: transcript view + trust ledger

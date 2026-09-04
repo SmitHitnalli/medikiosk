@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 
 import copy
+import difflib
 import json
 import os
 import re
@@ -17,7 +18,7 @@ import wave
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -53,6 +54,26 @@ Extract only these fields, matching the digitized_documents.extracted_entities s
 }
 
 Use empty arrays when a field is not present. Do not invent values or add fields outside this structure. For flag, use normal when the report does not indicate high or low."""
+DOC_TYPE_KEYWORDS = {
+    "prescription": [
+        "prescription", "rx", "tablet", "tab.", "cap.", "capsule", "dosage",
+        "sig", "refill", "prescribed", "morning", "evening", "twice daily",
+        "od", "bd", "tds", "physician", "dr.", "clinic",
+    ],
+    "lab_report": [
+        "lab report", "laboratory", "reference range", "test result",
+        "specimen", "pathology", "hemoglobin", "biochemistry", "sample",
+        "reported value", "reference interval", "investigation", "normal range",
+    ],
+    "discharge_summary": [
+        "discharge summary", "discharge", "admission", "date of admission",
+        "date of discharge", "hospital course", "condition on discharge",
+        "ward", "discharged", "final diagnosis",
+    ],
+}
+OCR_CONFIDENT_THRESHOLD = 0.55
+OCR_ILLEGIBLE_THRESHOLD = 0.2
+DOC_TYPE_CONFIDENT_THRESHOLD = 0.15
 SYSTEM_PROMPT = """You are Nurse Anjali, a warm, experienced clinical intake assistant at an AYUSH hospital in India. You are NOT a diagnostic tool - you only gather and organize a patient's history for the physician to review. You never diagnose, suggest treatment, or name a likely condition.
 
 PERSONA AND TONE:
@@ -296,8 +317,28 @@ def _get_easyocr_reader():
     return _easyocr_reader
 
 
+def _classify_document_type(extracted_text: str) -> tuple[str | None, float]:
+    """Fuzzy-match OCR text against known document-type keyword sets (stdlib only)."""
+    text_lower = extracted_text.lower()
+    words = re.findall(r"[a-z]+", text_lower)
+    best_type: str | None = None
+    best_score = 0.0
+    for doc_type, keywords in DOC_TYPE_KEYWORDS.items():
+        hits = 0.0
+        for keyword in keywords:
+            if keyword in text_lower:
+                hits += 1.0
+            elif " " not in keyword and difflib.get_close_matches(keyword, words, n=1, cutoff=0.82):
+                hits += 0.5
+        score = hits / len(keywords)
+        if score > best_score:
+            best_score = score
+            best_type = doc_type
+    return (best_type, round(best_score, 2)) if best_score > 0 else (None, 0.0)
+
+
 @app.post("/ocr")
-async def ocr(file: UploadFile = File(...)) -> dict:
+async def ocr(file: UploadFile = File(...), doc_type_hint: str | None = Form(None)) -> dict:
     image_data = await file.read()
     if not image_data:
         raise HTTPException(status_code=400, detail="The uploaded image file is empty")
@@ -310,9 +351,37 @@ async def ocr(file: UploadFile = File(...)) -> dict:
             temp_path = temp_file.name
 
         reader = _get_easyocr_reader()
-        extracted_text = "\n".join(reader.readtext(temp_path, detail=0)).strip()
-        if not extracted_text:
-            return {"extracted_entities": {"diagnoses": [], "medications": [], "lab_values": []}}
+        ocr_results = reader.readtext(temp_path, detail=1)
+        extracted_text = "\n".join(text for _, text, _ in ocr_results).strip()
+        ocr_confidence = (
+            round(sum(confidence for _, _, confidence in ocr_results) / len(ocr_results), 2)
+            if ocr_results
+            else 0.0
+        )
+
+        doc_type_hint = (doc_type_hint or "").strip() or None
+        if doc_type_hint:
+            suggested_doc_type, doc_type_confidence = doc_type_hint, 1.0
+        else:
+            suggested_doc_type, doc_type_confidence = _classify_document_type(extracted_text)
+
+        if not extracted_text or ocr_confidence < OCR_ILLEGIBLE_THRESHOLD:
+            return {
+                "extracted_entities": {"diagnoses": [], "medications": [], "lab_values": []},
+                "confidence": ocr_confidence,
+                "suggested_doc_type": suggested_doc_type,
+                "doc_type_confidence": doc_type_confidence,
+                "status": "illegible",
+                "extracted_text_preview": extracted_text[:200],
+            }
+
+        if doc_type_hint or (
+            ocr_confidence >= OCR_CONFIDENT_THRESHOLD
+            and doc_type_confidence >= DOC_TYPE_CONFIDENT_THRESHOLD
+        ):
+            status = "confident"
+        else:
+            status = "needs_confirmation"
 
         ollama_request = urllib.request.Request(
             OLLAMA_URL,
@@ -339,7 +408,12 @@ async def ocr(file: UploadFile = File(...)) -> dict:
                 "diagnoses": entities.get("diagnoses", []),
                 "medications": entities.get("medications", []),
                 "lab_values": entities.get("lab_values", []),
-            }
+            },
+            "confidence": ocr_confidence,
+            "suggested_doc_type": suggested_doc_type,
+            "doc_type_confidence": doc_type_confidence,
+            "status": status,
+            "extracted_text_preview": extracted_text[:200],
         }
     except HTTPException:
         raise

@@ -7,7 +7,7 @@ Tech stack:
 - Speech-to-text: faster-whisper
 - Text-to-speech: Piper TTS
 - Database: SQLite
-- OCR: PaddleOCR
+- OCR: EasyOCR
 
 Rules:
 - All clinical data must match the structure in docs/schema.json

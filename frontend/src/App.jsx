@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
 import ConsentScreen from "./ConsentScreen";
 import DoctorDashboard from "./DoctorDashboard";
+import DocumentScanner from "./DocumentScanner";
 import LanguageSelection from "./LanguageSelection";
 import ModeSelection from "./ModeSelection";
 import PatientIdentification from "./PatientIdentification";
@@ -10,23 +11,7 @@ import { stopAllAudio } from "./audio";
 
 const CHAT_ENDPOINT = "http://localhost:8080/chat";
 const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
-const OCR_ENDPOINT = "http://localhost:8080/ocr";
 const IDLE_TIMEOUT_MS = 90 * 1000;
-
-function asItems(value) {
-  if (Array.isArray(value)) return value.filter((item) => item != null && String(item).trim());
-  if (typeof value === "string" && value.trim()) return [value.trim()];
-  return [];
-}
-
-function formatLabValue(value) {
-  if (!value || typeof value !== "object") return String(value);
-  const name = value.name || "Lab value";
-  const reading = [value.value, value.unit].filter(Boolean).join(" ") || "Not provided";
-  const range = value.reference_range ? ` (reference: ${value.reference_range})` : "";
-  const flag = value.flag && value.flag !== "normal" ? ` · ${value.flag}` : "";
-  return `${name}: ${reading}${range}${flag}`;
-}
 
 function createSessionId() {
   if (window.crypto?.randomUUID) return window.crypto.randomUUID();
@@ -52,6 +37,7 @@ function App() {
   const [page, setPage] = useState(() => {
     if (window.location.hash === "#dashboard") return "dashboard";
     if (window.location.hash === "#chat") return "chat";
+    if (window.location.hash === "#documents") return "documents";
     if (window.location.hash === "#language") return "language";
     if (window.location.hash === "#consent") return "consent";
     if (window.location.hash === "#mode") return "mode";
@@ -77,8 +63,7 @@ function App() {
   const [redFlagReason, setRedFlagReason] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [ocrResult, setOcrResult] = useState(null);
-  const [isOcrUploading, setIsOcrUploading] = useState(false);
+  const [scannedDocuments, setScannedDocuments] = useState([]);
   const [error, setError] = useState("");
   const messageListRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -89,7 +74,6 @@ function App() {
   const silenceStartedAtRef = useRef(null);
   const recordingStartedAtRef = useRef(null);
   const silenceAnimationRef = useRef(null);
-  const documentInputRef = useRef(null);
 
   const clearSession = useCallback(() => {
     const recorder = mediaRecorderRef.current;
@@ -119,11 +103,10 @@ function App() {
     setSessionId(createSessionId());
     setMessage("");
     setRedFlagReason("");
-    setOcrResult(null);
+    setScannedDocuments([]);
     setError("");
     setIsSending(false);
     setIsRecording(false);
-    setIsOcrUploading(false);
   }, []);
 
   function returnToStart(showConfirmation = false) {
@@ -137,7 +120,7 @@ function App() {
     const handleHashChange = () => {
       stopAllAudio();
       const hash = window.location.hash;
-      setPage(hash === "#dashboard" ? "dashboard" : hash === "#language" ? "language" : hash === "#consent" ? "consent" : hash === "#mode" ? "mode" : hash === "#patient" ? "patient" : hash === "#department" ? "department" : hash === "#chat" ? "chat" : "idle");
+      setPage(hash === "#dashboard" ? "dashboard" : hash === "#documents" ? "documents" : hash === "#language" ? "language" : hash === "#consent" ? "consent" : hash === "#mode" ? "mode" : hash === "#patient" ? "patient" : hash === "#department" ? "department" : hash === "#chat" ? "chat" : "idle");
     };
     window.addEventListener("hashchange", handleHashChange);
     return () => window.removeEventListener("hashchange", handleHashChange);
@@ -145,7 +128,7 @@ function App() {
 
   function navigate(nextPage) {
     stopAllAudio();
-    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "language" ? "language" : nextPage === "consent" ? "consent" : nextPage === "mode" ? "mode" : nextPage === "patient" ? "patient" : nextPage === "department" ? "department" : nextPage === "chat" ? "chat" : "";
+    window.location.hash = nextPage === "dashboard" ? "dashboard" : nextPage === "documents" ? "documents" : nextPage === "language" ? "language" : nextPage === "consent" ? "consent" : nextPage === "mode" ? "mode" : nextPage === "patient" ? "patient" : nextPage === "department" ? "department" : nextPage === "chat" ? "chat" : "";
     setPage(nextPage);
   }
 
@@ -259,26 +242,6 @@ function App() {
     }
   }
 
-  async function uploadDocument(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    setIsOcrUploading(true);
-    setError("");
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const response = await fetch(OCR_ENDPOINT, { method: "POST", body: formData });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.detail || "The document could not be processed.");
-      setOcrResult(result.extracted_entities || result);
-    } catch (requestError) {
-      setError(requestError.message || "Unable to process the document.");
-    } finally {
-      setIsOcrUploading(false);
-      event.target.value = "";
-    }
-  }
-
   function stopSilenceMonitor() {
     if (silenceAnimationRef.current) cancelAnimationFrame(silenceAnimationRef.current);
     silenceAnimationRef.current = null;
@@ -365,7 +328,7 @@ function App() {
   }
 
   if (page === "dashboard") {
-    return <DoctorDashboard patientData={interviewData} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} />;
+    return <DoctorDashboard patientData={interviewData} documents={scannedDocuments} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} />;
   }
   if (page === "idle") {
     return <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;
@@ -385,6 +348,18 @@ function App() {
   if (page === "department") {
     return <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(selectedDepartment) => { setDepartment(selectedDepartment); navigate("chat"); }} onBack={() => navigate("patient")} onClearData={() => returnToStart(true)} />;
   }
+  if (page === "documents") {
+    return (
+      <DocumentScanner
+        language={language}
+        interactionMode={interactionMode}
+        initialDocuments={scannedDocuments}
+        onDone={(documents) => { setScannedDocuments(documents); navigate("chat"); }}
+        onBack={() => navigate("chat")}
+        onClearData={() => returnToStart(true)}
+      />
+    );
+  }
 
   return (
     <main className="app-shell">
@@ -397,6 +372,7 @@ function App() {
           </div>
           <div className="header-actions">
             <ClearDataButton onClearData={() => returnToStart(true)} />
+            <a className="dashboard-link" href="#documents" onClick={(event) => { event.preventDefault(); navigate("documents"); }}>{scannedDocuments.length > 0 ? `Documents (${scannedDocuments.length}) →` : "Scan documents →"}</a>
             <a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>{interviewData ? "View live summary →" : "Doctor dashboard →"}</a>
           </div>
         </header>
@@ -409,20 +385,6 @@ function App() {
               <p>{redFlagReason}</p>
             </div>
           </div>
-        )}
-
-        {ocrResult && (
-          <section className="ocr-card" aria-label="Extracted document fields">
-            <div className="ocr-card-heading">
-              <div><p className="section-kicker">Uploaded document</p><h2>Extracted fields</h2></div>
-              <span className="card-icon">▣</span>
-            </div>
-            <div className="ocr-fields">
-              <div><dt>Diagnoses</dt><dd>{asItems(ocrResult.diagnoses).length ? <ul>{asItems(ocrResult.diagnoses).map((item, index) => <li key={`${item}-${index}`}>{formatLabValue(item)}</li>)}</ul> : "Not provided"}</dd></div>
-              <div><dt>Medications</dt><dd>{asItems(ocrResult.medications).length ? <ul>{asItems(ocrResult.medications).map((item, index) => <li key={`${item}-${index}`}>{formatLabValue(item)}</li>)}</ul> : "Not provided"}</dd></div>
-              <div className="ocr-labs"><dt>Lab values</dt><dd>{asItems(ocrResult.lab_values).length ? <ul>{asItems(ocrResult.lab_values).map((item, index) => <li key={`${item.name || item}-${index}`}>{formatLabValue(item)}</li>)}</ul> : "Not provided"}</dd></div>
-            </div>
-          </section>
         )}
 
         <div className="message-list" ref={messageListRef} aria-live="polite">
@@ -465,10 +427,6 @@ function App() {
             aria-label="Your message"
             disabled={isSending}
           />
-          <input ref={documentInputRef} className="visually-hidden" type="file" accept="image/*" onChange={uploadDocument} />
-          <button className="document-button" type="button" onClick={() => documentInputRef.current?.click()} disabled={isOcrUploading || isSending || isRecording}>
-            {isOcrUploading ? "Reading..." : "Upload document"}
-          </button>
           <button
             className={`mic-button ${isRecording ? "recording" : ""}`}
             type="button"

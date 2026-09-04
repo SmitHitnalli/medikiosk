@@ -37,6 +37,11 @@ const hpiFields = [
 ];
 
 const SPEAK_ENDPOINT = "http://localhost:8080/speak";
+const DOC_TYPE_LABELS = {
+  prescription: "Prescription",
+  lab_report: "Lab report",
+  discharge_summary: "Discharge summary",
+};
 
 function normaliseItems(value) {
   const values = Array.isArray(value) ? value : value == null ? [] : [value];
@@ -74,7 +79,7 @@ function ListValue({ items }) {
   return <SafeValue value={items} />;
 }
 
-function DoctorDashboard({ patientData, onBack, onClearData }) {
+function DoctorDashboard({ patientData, documents, onBack, onClearData }) {
   const patient = patientData || samplePatient;
   const hpi = patient.hpi || {};
   const drugHistory = patient.drug_allergy_history || {};
@@ -170,6 +175,33 @@ function DoctorDashboard({ patientData, onBack, onClearData }) {
               <div className="detail-item"><dt>Koshtha</dt><dd><SafeValue value={ayush.koshtha} /></dd></div>
               <div className="detail-item detail-item-wide"><dt>Nidana</dt><dd><SafeValue value={ayush.nidana} /></dd></div>
             </dl>
+          </section>
+        )}
+
+        {documents && documents.length > 0 && (
+          <section className="dashboard-card documents-card">
+            <div className="card-heading"><div><p className="section-kicker">Digitized documents</p><h2>Scanned by patient</h2></div><span className="card-icon">▣</span></div>
+            <ul className="dashboard-doc-list">
+              {documents.map((doc) => (
+                <li className={`dashboard-doc-item ${doc.status === "illegible" ? "illegible" : ""}`} key={doc.id}>
+                  <div className="dashboard-doc-heading">
+                    <span className="dashboard-doc-type">
+                      {doc.status === "illegible" ? "Unreadable document" : DOC_TYPE_LABELS[doc.doc_type] || "Document"}
+                    </span>
+                    {doc.status === "confirmed" && <span className="dashboard-doc-flag">Patient-confirmed type</span>}
+                  </div>
+                  {doc.status === "illegible" ? (
+                    <p className="dashboard-doc-note">Could not be digitized - ask the patient for the physical copy.</p>
+                  ) : (
+                    <dl className="stacked-detail dashboard-doc-detail">
+                      <div><dt>Diagnoses</dt><dd><ListValue items={doc.extracted_entities?.diagnoses} /></dd></div>
+                      <div><dt>Medications</dt><dd><ListValue items={doc.extracted_entities?.medications} /></dd></div>
+                      <div><dt>Lab values</dt><dd><ListValue items={(doc.extracted_entities?.lab_values || []).map((value) => (value && typeof value === "object" ? `${value.name || "Lab value"}: ${[value.value, value.unit].filter(Boolean).join(" ") || "not provided"}${value.flag && value.flag !== "normal" ? ` · ${value.flag}` : ""}` : value))} /></dd></div>
+                    </dl>
+                  )}
+                </li>
+              ))}
+            </ul>
           </section>
         )}
       </div>
