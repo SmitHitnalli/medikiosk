@@ -13,6 +13,17 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 button, input { font: inherit; }
 button { min-height: 44px; }
 
+/* Kiosk-mode hardening: this runs on a public touchscreen, not a personal
+   device. touch-action prevents the browser's own pinch/double-tap zoom from
+   fighting with the app's own text-size control; user-select stops stray taps
+   from highlighting text. Re-enabled below for the few places (doctor
+   dashboard transcript/summary text) where copying is actually useful. */
+html, body { touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+.dashboard-transcript-bubble, .chief-complaint-value, .abdm-bundle-view, .detail-item dd, .stacked-detail dd {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
