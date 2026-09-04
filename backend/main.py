@@ -230,7 +230,19 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok"}
+    # Reports the backend process itself (always "ok" if this handler runs) plus a
+    # quick, short-timeout reachability probe of Ollama, since "the FastAPI process
+    # is alive" and "the AI assistant actually works" are different failure modes a
+    # patient can hit (e.g. Ollama not started / crashed while the backend is fine).
+    # Frontend uses this distinction for its graceful-failure fallback screens.
+    ollama_ok = False
+    try:
+        probe = urllib.request.Request("http://localhost:11434/api/tags", method="GET")
+        with urllib.request.urlopen(probe, timeout=1.5) as response:
+            ollama_ok = response.status == 200
+    except Exception:
+        ollama_ok = False
+    return {"status": "ok", "ollama": "ok" if ollama_ok else "unreachable"}
 
 
 @app.post("/staff/verify-pin")

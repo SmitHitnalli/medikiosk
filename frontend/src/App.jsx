@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import AccessibilityBar from "./AccessibilityBar";
+import SystemStatusGate from "./SystemStatusGate";
 import ClearDataButton from "./ClearDataButton";
 import ConsentScreen from "./ConsentScreen";
 import DoctorDashboard from "./DoctorDashboard";
@@ -462,7 +463,7 @@ function App() {
 
   return (
     <>
-      {pageContent}
+      <SystemStatusGate>{pageContent}</SystemStatusGate>
       <AccessibilityBar sessionId={sessionId} department={department} patientName={patientInfo?.name} page={page} />
     </>
   );

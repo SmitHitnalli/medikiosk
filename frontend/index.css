@@ -338,6 +338,25 @@ html[data-high-contrast="true"] .message-row.user .message-bubble {
 .a11y-button:hover { background: #ffffff26; }
 .a11y-button.active { color: #0d3b3b; background: #f6c453; border-color: #f6c453; }
 .a11y-button:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Non-blocking degraded-mode banner (SystemStatusGate) - backend is up but
+   Ollama isn't, so the AI-dependent parts of the app won't respond. Fixed at
+   the top so it reads consistently no matter which page layout is underneath. */
+.system-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 45;
+  margin: 0;
+  padding: 10px 16px;
+  background: #f6c453;
+  color: #4a3400;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+html[data-high-contrast="true"] .system-banner { background-color: #ffe600 !important; color: #000 !important; }
 .a11y-help { border-color: #d83d35a0; }
 .a11y-help.a11y-help-sending { opacity: .7; }
 .a11y-help.a11y-help-sent { color: #0d3b3b; background: #6fcf97; border-color: #6fcf97; }
