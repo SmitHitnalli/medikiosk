@@ -37,6 +37,7 @@ const hpiFields = [
 ];
 
 const SPEAK_ENDPOINT = "http://localhost:8080/speak";
+const ABDM_PUSH_ENDPOINT = "http://localhost:8080/abdm/push";
 const DOC_TYPE_LABELS = {
   prescription: "Prescription",
   lab_report: "Lab report",
@@ -124,7 +125,7 @@ function ListValue({ items }) {
   return <SafeValue value={items} />;
 }
 
-function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, department, onBack, onClearData, onOpenNurseStation }) {
+function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, department, sessionId, mediId, patientName, onBack, onClearData, onOpenNurseStation }) {
   const patient = patientData || samplePatient;
   const hpi = patient.hpi || {};
   const drugHistory = patient.drug_allergy_history || {};
@@ -145,6 +146,60 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   );
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechError, setSpeechError] = useState("");
+  const [pushState, setPushState] = useState("idle"); // idle | pushing | pushed | error
+  const [pushRecord, setPushRecord] = useState(null);
+  const [pushError, setPushError] = useState("");
+  const [showBundle, setShowBundle] = useState(false);
+
+  // Hydrate any prior mock ABDM push for this session, so re-opening the
+  // dashboard (or the physician navigating away and back) still shows it was
+  // already pushed instead of looking like a fresh, unpushed summary.
+  useEffect(() => {
+    if (isSample || !sessionId) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`${ABDM_PUSH_ENDPOINT}/${sessionId}`);
+        if (!response.ok) return;
+        const result = await response.json();
+        if (!cancelled && result.pushed) {
+          setPushRecord(result);
+          setPushState("pushed");
+        }
+      } catch {
+        // Silent - this is just a convenience hydration; the push button still works either way.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, isSample]);
+
+  async function handlePush() {
+    if (!sessionId) return;
+    setPushState("pushing");
+    setPushError("");
+    try {
+      const response = await fetch(ABDM_PUSH_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          medi_id: mediId || null,
+          patient_name: patientName || null,
+          department: department || null,
+          documents: documents || [],
+        }),
+      });
+      if (!response.ok) throw new Error("Could not push to ABDM/HIS.");
+      const result = await response.json();
+      setPushRecord(result);
+      setPushState("pushed");
+    } catch (error) {
+      setPushState("error");
+      setPushError(error.message || "Unable to push to ABDM/HIS.");
+    }
+  }
 
   async function playSummary() {
     setIsSpeaking(true);
@@ -307,6 +362,39 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
                 {docStatusCounts.illegible > 0 && `${docStatusCounts.illegible} unreadable`}
               </p>
             </div>
+          )}
+        </section>
+
+        <section className="dashboard-card abdm-push-card">
+          <div className="card-heading"><div><p className="section-kicker">ABDM / Hospital HIS</p><h2>Push structured history</h2></div><span className="card-icon">⇪</span></div>
+          {isSample ? (
+            <p className="trust-metric-note">Open a real patient's interview to push their history - this is disabled for the sample patient.</p>
+          ) : (
+            <>
+              <p className="abdm-push-copy">
+                Sends this structured history as a FHIR Bundle, linked to the patient's Medi ID, to the hospital
+                HIS and the ABHA record. <strong>This is a mock integration</strong> - no real ABDM sandbox is
+                reachable from this environment, so the push is simulated and recorded here with the exact
+                Bundle that would be sent to a real ABDM endpoint.
+              </p>
+              <div className="abdm-push-actions">
+                <button className="play-summary-button" type="button" onClick={handlePush} disabled={pushState === "pushing"}>
+                  {pushState === "pushing" ? "Pushing..." : pushRecord ? "Push again" : "Push to ABDM/HIS"}
+                </button>
+                {pushRecord && (
+                  <button className="secondary-start-button" type="button" onClick={() => setShowBundle((current) => !current)}>
+                    {showBundle ? "Hide FHIR bundle" : "View FHIR bundle"}
+                  </button>
+                )}
+              </div>
+              {pushRecord && (
+                <p className="abdm-push-status">
+                  Pushed (mock) at {formatEventTime(pushRecord.pushed_at)} · Reference {pushRecord.abdm_reference}
+                </p>
+              )}
+              {pushError && <p className="speech-error" role="alert">{pushError}</p>}
+              {showBundle && pushRecord && <pre className="abdm-bundle-view">{JSON.stringify(pushRecord.bundle, null, 2)}</pre>}
+            </>
           )}
         </section>
 

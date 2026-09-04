@@ -908,3 +908,178 @@ def request_help(request: HelpRequest) -> dict:
         kind="help_request",
     )
     return {"status": "ok"}
+
+
+
+# ---------------------------------------------------------------------------
+# Mock ABDM/FHIR push
+#
+# The problem statement calls for the structured history to be "pushed to the
+# hospital HIS/EMR and linked to the ABHA Personal Health Record via FHIR
+# APIs" once the physician accepts it. No real ABDM sandbox credentials or
+# network access exist in this environment, so this simulates that hop: it
+# builds a genuine FHIR-shaped Bundle from the session's accumulated history
+# and digitized documents, "pushes" it by recording it server-side, and
+# returns a mock ABDM reference. The Bundle's shape and content are real -
+# only the destination is simulated - so swapping in a real ABDM client later
+# is a matter of replacing the in-memory store with an actual HTTP call.
+# ---------------------------------------------------------------------------
+_abdm_push_log: dict[str, dict] = {}
+_abdm_push_lock = threading.Lock()
+
+
+class AbdmPushRequest(BaseModel):
+    session_id: str
+    medi_id: str | None = None
+    patient_name: str | None = None
+    department: str | None = None
+    documents: list[dict] = Field(default_factory=list)
+
+
+def _build_fhir_bundle(
+    patient_ref: str,
+    patient_name: str | None,
+    medi_id: str | None,
+    department: str | None,
+    data: dict,
+    documents: list[dict],
+) -> dict:
+    entries = [
+        {
+            "resource": {
+                "resourceType": "Patient",
+                "id": patient_ref,
+                "identifier": [{"system": "https://healthid.ndhm.gov.in/mock", "value": medi_id or "unassigned"}],
+                "name": [{"text": patient_name or "Unknown patient"}],
+            }
+        },
+        {
+            "resource": {
+                "resourceType": "Condition",
+                "subject": {"reference": f"Patient/{patient_ref}"},
+                "code": {"text": data.get("chief_complaint") or "Not recorded"},
+                "note": [
+                    {
+                        "text": json.dumps(
+                            {
+                                "department": department,
+                                "hpi": data.get("hpi", {}),
+                                "past_medical_history": data.get("past_medical_history", []),
+                                "past_surgical_history": data.get("past_surgical_history", []),
+                                "family_history": data.get("family_history", []),
+                                "personal_history": data.get("personal_history", {}),
+                                "ayush_assessment": data.get("ayush_assessment", {}),
+                            }
+                        )
+                    }
+                ],
+            }
+        },
+    ]
+
+    drug_history = data.get("drug_allergy_history") or {}
+    for medication in drug_history.get("current_medications") or []:
+        entries.append(
+            {
+                "resource": {
+                    "resourceType": "MedicationStatement",
+                    "subject": {"reference": f"Patient/{patient_ref}"},
+                    "status": "active",
+                    "medicationCodeableConcept": {"text": medication},
+                }
+            }
+        )
+    for allergy in drug_history.get("allergies") or []:
+        entries.append(
+            {
+                "resource": {
+                    "resourceType": "AllergyIntolerance",
+                    "patient": {"reference": f"Patient/{patient_ref}"},
+                    "code": {"text": allergy},
+                }
+            }
+        )
+
+    if data.get("red_flag"):
+        entries.append(
+            {
+                "resource": {
+                    "resourceType": "Flag",
+                    "status": "active",
+                    "subject": {"reference": f"Patient/{patient_ref}"},
+                    "code": {"text": data.get("red_flag_reason") or "Urgent symptoms flagged"},
+                }
+            }
+        )
+
+    for document in documents or []:
+        extracted = document.get("extracted_entities") or {}
+        source_note = f"From digitized {document.get('doc_type') or 'document'}"
+        for diagnosis in extracted.get("diagnoses") or []:
+            entries.append(
+                {
+                    "resource": {
+                        "resourceType": "Condition",
+                        "subject": {"reference": f"Patient/{patient_ref}"},
+                        "code": {"text": diagnosis},
+                        "note": [{"text": source_note}],
+                    }
+                }
+            )
+        for medication in extracted.get("medications") or []:
+            entries.append(
+                {
+                    "resource": {
+                        "resourceType": "MedicationStatement",
+                        "subject": {"reference": f"Patient/{patient_ref}"},
+                        "status": "unknown",
+                        "medicationCodeableConcept": {"text": medication},
+                        "note": [{"text": source_note}],
+                    }
+                }
+            )
+        for lab_value in extracted.get("lab_values") or []:
+            entries.append(
+                {
+                    "resource": {
+                        "resourceType": "Observation",
+                        "status": "final",
+                        "subject": {"reference": f"Patient/{patient_ref}"},
+                        "code": {"text": lab_value.get("name") or "Lab value"},
+                        "valueString": lab_value.get("value"),
+                        "interpretation": [{"text": lab_value.get("flag") or "normal"}],
+                        "note": [{"text": source_note}],
+                    }
+                }
+            )
+
+    return {"resourceType": "Bundle", "type": "collection", "timestamp": datetime.now(timezone.utc).isoformat(), "entry": entries}
+
+
+@app.post("/abdm/push")
+def push_to_abdm(request: AbdmPushRequest) -> dict:
+    session_id = request.session_id.strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    with _session_data_lock:
+        data = copy.deepcopy(_accumulated_data_by_session.get(session_id, {}))
+    patient_ref = request.medi_id or session_id
+    bundle = _build_fhir_bundle(patient_ref, request.patient_name, request.medi_id, request.department, data, request.documents)
+    record = {
+        "session_id": session_id,
+        "pushed": True,
+        "mock": True,
+        "abdm_reference": "MOCK-ABDM-" + secrets.token_hex(4).upper(),
+        "pushed_at": datetime.now(timezone.utc).isoformat(),
+        "bundle": bundle,
+    }
+    with _abdm_push_lock:
+        _abdm_push_log[session_id] = record
+    return record
+
+
+@app.get("/abdm/push/{session_id}")
+def get_abdm_push_status(session_id: str) -> dict:
+    with _abdm_push_lock:
+        record = _abdm_push_log.get(session_id)
+    return dict(record) if record else {"pushed": False}

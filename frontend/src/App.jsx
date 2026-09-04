@@ -348,7 +348,7 @@ function App() {
     } else if (page === "nurse-station") {
       pageContent = <NurseStation onBack={() => navigate("dashboard")} />;
     } else {
-      pageContent = <DoctorDashboard patientData={interviewData} documents={scannedDocuments} transcript={messages} redFlagEvents={redFlagEvents} department={department} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} onOpenNurseStation={() => navigate("nurse-station")} />;
+      pageContent = <DoctorDashboard patientData={interviewData} documents={scannedDocuments} transcript={messages} redFlagEvents={redFlagEvents} department={department} sessionId={sessionId} mediId={patientInfo?.medi_id} patientName={patientInfo?.name} onBack={() => navigate("chat")} onClearData={() => returnToStart(true)} onOpenNurseStation={() => navigate("nurse-station")} />;
     }
   } else if (page === "idle") {
     pageContent = <><StartScreen onStart={() => { setClearConfirmation(""); clearSession(); navigate("language"); }} />{clearConfirmation && <div className="clear-confirmation" role="status">{clearConfirmation}</div>}</>;

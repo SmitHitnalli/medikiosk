@@ -256,7 +256,7 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .staff-pin-error { margin: 16px 0 0; text-align: center; }
 .staff-pin-back { margin-top: 20px; }
 
-.trust-ledger-card, .transcript-card { grid-column: 1 / -1; }
+.trust-ledger-card, .transcript-card, .abdm-push-card { grid-column: 1 / -1; }
 .trust-metric { margin-bottom: 20px; }
 .trust-metric-heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; color: #284b48; font-size: 13px; font-weight: 700; }
 .trust-metric-bar { height: 8px; border-radius: 999px; overflow: hidden; background: #e4eee9; }
@@ -357,6 +357,24 @@ html[data-high-contrast="true"] .message-row.user .message-bubble {
   text-align: center;
 }
 html[data-high-contrast="true"] .system-banner { background-color: #ffe600 !important; color: #000 !important; }
+
+/* ABDM/HIS mock-push card (Doctor dashboard) */
+.abdm-push-copy { margin: 0 0 14px; color: #4c6864; font-size: 13px; line-height: 1.55; }
+.abdm-push-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.abdm-push-status { margin: 12px 0 0; color: #0f766e; font-size: 12px; font-weight: 700; }
+.abdm-bundle-view {
+  margin-top: 14px;
+  padding: 14px;
+  max-height: 360px;
+  overflow: auto;
+  border-radius: 10px;
+  background: #0d2523;
+  color: #b7e4d8;
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
 .a11y-help { border-color: #d83d35a0; }
 .a11y-help.a11y-help-sending { opacity: .7; }
 .a11y-help.a11y-help-sent { color: #0d3b3b; background: #6fcf97; border-color: #6fcf97; }
