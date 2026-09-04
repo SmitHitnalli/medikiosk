@@ -38,7 +38,7 @@
 - [x] Staff PIN gate on doctor dashboard + Nurse Station (server-verified via STAFF_PIN in backend/.env, default 1234)
 - [ ] Split frontend into frontend-patient/ and frontend-doctor/ (deferred: bigger/riskier restructure, no functional benefit beyond deployment packaging - single Vite app works fine for the demo)
 - [x] Doctor dashboard: transcript view + trust ledger (history-completeness meter, red-flag audit with source attribution, document-verification summary)
-- [ ] Session data clearing confirmation UI
+- [x] Session data clearing confirmation UI (confirm dialog before wiping session data, self-contained in ClearDataButton so every screen picked it up automatically)
 - [ ] Voice polish (alternate Piper voice) and performance polish (smaller Whisper model, Ollama keep-alive, image downscaling)
 - [ ] Accessibility baseline (large fonts, high contrast, big touch targets, repeat button, help button)
 - [ ] Graceful failure fallback screens

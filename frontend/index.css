@@ -271,3 +271,13 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 @media (max-width: 600px) {
   .dashboard-transcript-row { max-width: 92%; }
 }
+
+.clear-confirm-overlay { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(10, 26, 24, .55); backdrop-filter: blur(2px); }
+.clear-confirm-dialog { width: 100%; max-width: 380px; padding: 26px 24px; border-radius: 16px; background: #fffdf8; box-shadow: 0 20px 48px rgba(10, 26, 24, .28); text-align: center; }
+.clear-confirm-heading { margin: 0; color: #173b3c; font-family: "Space Grotesk", sans-serif; font-size: 19px; font-weight: 700; }
+.clear-confirm-copy { margin: 10px 0 0; color: #5c7570; font-size: 13.5px; line-height: 1.5; }
+.clear-confirm-actions { display: grid; gap: 10px; margin-top: 22px; }
+.clear-confirm-no { min-height: 48px; border: 0; border-radius: 11px; color: #fff; background: #0f766e; cursor: pointer; font-size: 14.5px; font-weight: 700; }
+.clear-confirm-no:hover { background: #0c5a54; }
+.clear-confirm-yes { min-height: 44px; border: 1px solid #e8aaa3; border-radius: 11px; color: #a52b27; background: transparent; cursor: pointer; font-size: 13px; font-weight: 700; }
+.clear-confirm-yes:hover { background: #fff0ee; }
