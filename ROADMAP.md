@@ -1,6 +1,7 @@
 # MediKiosk build roadmap
 
 ## Done
+- [x] Complete MediKiosk product and SIH26047 study guide exported as `output/pdf/MediKiosk_Complete_Product_Guide.pdf` (20-page A4 PDF with workflows, architecture, usage, limitations, setup, demo plan, judge Q&A, and sources; rendered and visually verified page by page)
 - [x] Git repository initialized and connected to GitHub
 - [x] AGENTS.md and ROADMAP.md created
 - [x] Backend skeleton (FastAPI, /health endpoint)
