@@ -33,14 +33,15 @@
     "vikriti": "string",
     "agni": "string",
     "koshtha": "string",
-    "ahara_vihara": "string",
     "nidana": "string",
-    "samprapti": "string"
+    "panchakarma_history": "string"
   },
   "digitized_documents": [
     {
-      "doc_type": "prescription | lab_report | discharge_summary",
+      "id": "string",
+      "doc_type": "prescription | lab_report | discharge_summary | null",
       "date": "string",
+      "status": "confident | confirmed | illegible",
       "extracted_entities": {
         "diagnoses": ["string"],
         "medications": ["string"],

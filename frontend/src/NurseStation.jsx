@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-
-const ALERTS_ENDPOINT = "http://localhost:8080/nurse-station/alerts";
+import { apiFetch, staffHeaders } from "./api";
 const POLL_INTERVAL_MS = 4000;
 
 function formatTimeAgo(isoString) {
@@ -18,8 +17,9 @@ function formatTimeAgo(isoString) {
 // keyword check + LLM secondary check, combined server-side) and lets staff
 // acknowledge each one. No websockets - simple polling fits the hackathon
 // scale and keeps the backend stateless-ish and easy to reason about.
-function NurseStation({ onBack }) {
+function NurseStation({ onBack, staffToken, onSessionExpired, onLogout }) {
   const [alerts, setAlerts] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [acknowledgingId, setAcknowledgingId] = useState(null);
   const [, forceTick] = useState(0);
@@ -28,15 +28,21 @@ function NurseStation({ onBack }) {
 
   const fetchAlerts = useCallback(async () => {
     try {
-      const response = await fetch(ALERTS_ENDPOINT);
+      const response = await apiFetch("/nurse-station/alerts", { headers: staffHeaders(staffToken) }, 10000);
+      if (response.status === 401) {
+        onSessionExpired();
+        return;
+      }
       if (!response.ok) throw new Error("Could not load alerts");
       const result = await response.json();
       setAlerts(result.alerts || []);
       setError("");
     } catch (fetchError) {
       setError(fetchError.message || "Unable to reach the backend.");
+    } finally {
+      setIsLoading(false);
     }
-  }, []);
+  }, [staffToken, onSessionExpired]);
 
   useEffect(() => {
     void fetchAlerts();
@@ -52,7 +58,14 @@ function NurseStation({ onBack }) {
     setAcknowledgingId(alertId);
     setError("");
     try {
-      const response = await fetch(`${ALERTS_ENDPOINT}/${alertId}/acknowledge`, { method: "POST" });
+      const response = await apiFetch(`/nurse-station/alerts/${encodeURIComponent(alertId)}/acknowledge`, {
+        method: "POST",
+        headers: staffHeaders(staffToken),
+      }, 10000);
+      if (response.status === 401) {
+        onSessionExpired();
+        return;
+      }
       if (!response.ok) throw new Error("Could not acknowledge this alert.");
       setAlerts((current) => current.filter((alert) => alert.id !== alertId));
     } catch (ackError) {
@@ -75,13 +88,19 @@ function NurseStation({ onBack }) {
           </p>
         </div>
         <div className="dashboard-actions">
+          {onLogout && <button className="back-link" type="button" onClick={onLogout}>Lock staff view</button>}
           <button className="back-link" type="button" onClick={onBack}>← Back to dashboard</button>
         </div>
       </header>
 
       {error && <p className="error-message nurse-station-error" role="alert">{error}</p>}
 
-      {alerts.length === 0 ? (
+      {isLoading ? (
+        <section className="chief-complaint-card nurse-station-empty">
+          <div className="section-kicker">Loading</div>
+          <p className="nurse-station-empty-copy">Checking for active alerts...</p>
+        </section>
+      ) : error ? null : alerts.length === 0 ? (
         <section className="chief-complaint-card nurse-station-empty">
           <div className="section-kicker">All clear</div>
           <p className="nurse-station-empty-copy">No patients are currently flagged. New alerts will appear here within a few seconds of being triggered.</p>

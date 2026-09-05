@@ -9,6 +9,11 @@ export function hasRepeatableAudio() {
   return lastSpokenBlob !== null;
 }
 
+export function clearRepeatAudio() {
+  stopAllAudio();
+  lastSpokenBlob = null;
+}
+
 export function repeatLastAudio() {
   if (!lastSpokenBlob) return Promise.resolve();
   return playAudioBlob(lastSpokenBlob);

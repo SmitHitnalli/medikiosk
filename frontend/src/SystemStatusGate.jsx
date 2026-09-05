@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-
-const HEALTH_ENDPOINT = "http://localhost:8080/health";
+import { apiFetch } from "./api";
 const POLL_INTERVAL_MS = 8000;
 const REQUEST_TIMEOUT_MS = 4000;
 // Require a couple of consecutive failures before declaring the backend down,
@@ -28,7 +27,7 @@ function SystemStatusGate({ children }) {
 
     async function check() {
       try {
-        const response = await fetch(HEALTH_ENDPOINT, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+        const response = await apiFetch("/health", {}, REQUEST_TIMEOUT_MS);
         if (!response.ok) throw new Error("Backend returned an error status");
         const data = await response.json();
         if (cancelled) return;

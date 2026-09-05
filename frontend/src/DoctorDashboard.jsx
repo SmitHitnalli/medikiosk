@@ -1,30 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
 import { playAudioBlob, stopAllAudio } from "./audio";
-
-const samplePatient = {
-  chief_complaint: "Chest discomfort, worse on exertion",
-  hpi: {
-    site: "Central chest",
-    onset: "3 days ago",
-    character: "Dull ache",
-    radiation: "None",
-    associated_symptoms: ["Mild breathlessness on exertion"],
-    timing: "Intermittent",
-    exacerbating_relieving: "Worse climbing stairs, better with rest",
-    severity: "4 out of 10",
-  },
-  drug_allergy_history: {
-    current_medications: ["Amlodipine 5mg"],
-    allergies: ["Sulfa drugs"],
-  },
-  ayush_assessment: {
-    prakriti: "Vata-Pitta",
-    agni: "Irregular",
-    koshtha: "Medium",
-    nidana: "Stress, irregular meals",
-  },
-};
+import { apiFetch, staffHeaders } from "./api";
 
 const hpiFields = [
   ["Site", "site"],
@@ -36,8 +13,6 @@ const hpiFields = [
   ["Severity", "severity"],
 ];
 
-const SPEAK_ENDPOINT = "http://localhost:8080/speak";
-const ABDM_PUSH_ENDPOINT = "http://localhost:8080/abdm/push";
 const DOC_TYPE_LABELS = {
   prescription: "Prescription",
   lab_report: "Lab report",
@@ -55,8 +30,19 @@ const CORE_FIELDS = [
   ["hpi.timing", "Timing"],
   ["hpi.exacerbating_relieving", "Exacerbating / relieving factors"],
   ["hpi.severity", "Severity"],
+  ["past_medical_history", "Past medical history"],
+  ["past_surgical_history", "Past surgical history"],
+  ["drug_allergy_history.current_medications", "Current medications"],
+  ["drug_allergy_history.allergies", "Allergies"],
+  ["family_history", "Family history"],
+  ["personal_history.diet", "Diet"],
+  ["personal_history.smoking", "Tobacco use"],
+  ["personal_history.alcohol", "Alcohol use"],
+  ["personal_history.occupation", "Occupation"],
+  ["review_of_systems", "Other symptoms review"],
 ];
 const AYUSH_FIELDS = [
+  ["ayush_assessment.prakriti", "Prakriti (constitution)"],
   ["ayush_assessment.vikriti", "Vikriti (current imbalance)"],
   ["ayush_assessment.agni", "Agni (digestion pattern)"],
   ["ayush_assessment.koshtha", "Koshtha (bowel pattern)"],
@@ -74,7 +60,7 @@ function getNestedValue(data, path) {
 
 function isFieldFilled(value) {
   if (value == null) return false;
-  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "string") return !["", "unknown", "not known", "not provided", "not recorded", "n/a"].includes(value.trim().toLowerCase());
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === "object") return Object.keys(value).length > 0;
   return true;
@@ -94,7 +80,7 @@ function normaliseItems(value) {
   return values
     .map((item) => {
       if (typeof item === "string") return item.trim();
-      if (typeof item === "object") return JSON.stringify(item);
+      if (typeof item === "object") return Object.keys(item).length ? JSON.stringify(item) : "";
       return String(item);
     })
     .filter(Boolean);
@@ -107,7 +93,7 @@ function textValue(value, fallback = "not provided") {
 
 function buildSummary(patient) {
   const hpi = patient.hpi || {};
-  return `The patient reports ${textValue(patient.chief_complaint)}. The symptom is located at ${textValue(hpi.site)}, started ${textValue(hpi.onset)}, and is described as ${textValue(hpi.character)}. It ${textValue(hpi.radiation, "does not radiate")}, with ${textValue(hpi.associated_symptoms, "no associated symptoms")}. It is ${textValue(hpi.timing)}, ${textValue(hpi.exacerbating_relieving, "with no aggravating or relieving factors noted")}, and has a severity of ${textValue(hpi.severity)}.`;
+  return `The patient reports ${textValue(patient.chief_complaint)}. The symptom site is ${textValue(hpi.site, "not recorded")}; onset is ${textValue(hpi.onset, "not recorded")}; character is ${textValue(hpi.character, "not recorded")}; radiation is ${textValue(hpi.radiation, "not recorded")}; associated symptoms are ${textValue(hpi.associated_symptoms, "not recorded")}; timing is ${textValue(hpi.timing, "not recorded")}; aggravating or relieving factors are ${textValue(hpi.exacerbating_relieving, "not recorded")}; and severity is ${textValue(hpi.severity, "not recorded")}.`;
 }
 
 function SafeValue({ value }) {
@@ -125,14 +111,17 @@ function ListValue({ items }) {
   return <SafeValue value={items} />;
 }
 
-function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, department, sessionId, mediId, patientName, onBack, onClearData, onOpenNurseStation }) {
-  const patient = patientData || samplePatient;
+function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, department, sessionId, mediId, patientName, language, staffToken, onSessionExpired, onLoadSession, onBack, onClearData, onOpenNurseStation, onLogout }) {
+  const patient = patientData || {};
   const hpi = patient.hpi || {};
   const drugHistory = patient.drug_allergy_history || {};
   const ayush = patient.ayush_assessment || {};
   const hasAyushData = Object.values(ayush).some((value) => normaliseItems(value).length > 0);
-  const isSample = !patientData;
-  const trackedFields = (department || "").trim().toLowerCase() === "general" ? CORE_FIELDS : [...CORE_FIELDS, ...AYUSH_FIELDS];
+  const hasPatientData = Boolean(patientData);
+  const normalizedDepartment = (department || "general").trim().toLowerCase();
+  const trackedFields = normalizedDepartment === "general"
+    ? CORE_FIELDS
+    : [...CORE_FIELDS, ...AYUSH_FIELDS, ...(normalizedDepartment === "panchakarma" ? [["ayush_assessment.panchakarma_history", "Panchakarma history"]] : [])];
   const filledFields = trackedFields.filter(([path]) => isFieldFilled(getNestedValue(patient, path)));
   const missingFields = trackedFields.filter(([path]) => !isFieldFilled(getNestedValue(patient, path)));
   const completenessPct = trackedFields.length ? Math.round((filledFields.length / trackedFields.length) * 100) : 0;
@@ -150,16 +139,19 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   const [pushRecord, setPushRecord] = useState(null);
   const [pushError, setPushError] = useState("");
   const [showBundle, setShowBundle] = useState(false);
+  const [recentSessions, setRecentSessions] = useState([]);
+  const speechRequestRef = useRef(null);
 
   // Hydrate any prior mock ABDM push for this session, so re-opening the
   // dashboard (or the physician navigating away and back) still shows it was
   // already pushed instead of looking like a fresh, unpushed summary.
   useEffect(() => {
-    if (isSample || !sessionId) return undefined;
+    if (!sessionId || !staffToken) return undefined;
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(`${ABDM_PUSH_ENDPOINT}/${sessionId}`);
+        const response = await apiFetch(`/abdm/push/${encodeURIComponent(sessionId)}`, { headers: staffHeaders(staffToken) }, 10000);
+        if (response.status === 401) return onSessionExpired();
         if (!response.ok) return;
         const result = await response.json();
         if (!cancelled && result.pushed) {
@@ -173,24 +165,36 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
     return () => {
       cancelled = true;
     };
-  }, [sessionId, isSample]);
+  }, [sessionId, staffToken, onSessionExpired]);
+
+  useEffect(() => {
+    if (!staffToken) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await apiFetch("/staff/sessions", { headers: staffHeaders(staffToken) }, 10000);
+        if (response.status === 401) return onSessionExpired();
+        if (!response.ok) return;
+        const result = await response.json();
+        if (!cancelled) setRecentSessions(result.sessions || []);
+      } catch {
+        // The active record remains usable when the recent-session list cannot load.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [staffToken, onSessionExpired]);
 
   async function handlePush() {
     if (!sessionId) return;
     setPushState("pushing");
     setPushError("");
     try {
-      const response = await fetch(ABDM_PUSH_ENDPOINT, {
+      const response = await apiFetch("/abdm/push", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          medi_id: mediId || null,
-          patient_name: patientName || null,
-          department: department || null,
-          documents: documents || [],
-        }),
-      });
+        headers: staffHeaders(staffToken, true),
+        body: JSON.stringify({ session_id: sessionId, physician_reviewed: true }),
+      }, 15000);
+      if (response.status === 401) return onSessionExpired();
       if (!response.ok) throw new Error("Could not push to ABDM/HIS.");
       const result = await response.json();
       setPushRecord(result);
@@ -202,27 +206,38 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   }
 
   async function playSummary() {
+    const controller = new AbortController();
+    speechRequestRef.current?.abort();
+    speechRequestRef.current = controller;
     setIsSpeaking(true);
     setSpeechError("");
     try {
-      const response = await fetch(SPEAK_ENDPOINT, {
+      const response = await apiFetch("/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: buildSummary(patient) }),
+        body: JSON.stringify({ text: buildSummary(patient), language: language || "en" }),
+        signal: controller.signal,
       });
       if (!response.ok) {
         const result = await response.json();
         throw new Error(result.detail || "The summary could not be spoken.");
       }
       await playAudioBlob(await response.blob());
-      setIsSpeaking(false);
+      if (!controller.signal.aborted) setIsSpeaking(false);
     } catch (error) {
-      setIsSpeaking(false);
-      setSpeechError(error.message || "Unable to play the summary.");
+      if (!controller.signal.aborted) {
+        setIsSpeaking(false);
+        setSpeechError(error.message || "Unable to play the summary.");
+      }
+    } finally {
+      if (speechRequestRef.current === controller) speechRequestRef.current = null;
     }
   }
 
-  useEffect(() => () => stopAllAudio(), []);
+  useEffect(() => () => {
+    speechRequestRef.current?.abort();
+    stopAllAudio();
+  }, []);
 
   return (
     <main className="dashboard-shell">
@@ -233,20 +248,46 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
           <p className="subtitle">Review the structured history before the consultation.</p>
         </div>
         <div className="dashboard-actions">
-          <ClearDataButton onClearData={onClearData} />
+          {onClearData && <ClearDataButton language={language} onClearData={onClearData} />}
           <button className="nurse-station-link" type="button" onClick={onOpenNurseStation}>Nurse Station →</button>
+          <button className="back-link" type="button" onClick={onLogout}>Lock staff view</button>
           <button className="back-link" type="button" onClick={onBack}>← Back to interview</button>
         </div>
       </header>
 
+      {recentSessions.length > 0 && (
+        <section className="dashboard-card recent-sessions-card">
+          <div className="card-heading"><div><p className="section-kicker">Patient records</p><h2>Recent clinical sessions</h2></div></div>
+          <div className="recent-session-list">
+            {recentSessions.map((item) => (
+              <button
+                type="button"
+                className={`recent-session-button ${item.session_id === sessionId ? "active" : ""}`}
+                key={item.session_id}
+                onClick={() => onLoadSession(item.session_id)}
+              >
+                <strong>{item.patient_name || "Unknown patient"}</strong>
+                <span>{item.patient_medi_id} · {item.department || "Department pending"}</span>
+                <span>{item.chief_complaint || "History not started"}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       <section className="chief-complaint-card">
+        <div className="patient-identity-line">
+          <strong>{patientName || "No patient selected"}</strong>
+          <span>{mediId || "No Medi ID"} · {department || "Department pending"}</span>
+        </div>
         <div className="section-kicker">Chief complaint</div>
         <div className="chief-complaint-value"><SafeValue value={patient.chief_complaint} /></div>
         <div className="chief-complaint-actions">
-          <span className="sample-badge">{isSample ? "Sample patient · Draft" : "Live conversation · Ready for review"}</span>
-          <button className="play-summary-button" type="button" onClick={playSummary} disabled={isSpeaking}>
+          <span className="sample-badge">{hasPatientData ? (patient.interview_complete ? "Interview complete" : "Live draft") : "No clinical history yet"}</span>
+          <button className="play-summary-button" type="button" onClick={playSummary} disabled={isSpeaking || !hasPatientData}>
             {isSpeaking ? "Playing summary..." : "▶ Play summary"}
           </button>
+          <button className="secondary-start-button" type="button" onClick={() => window.print()} disabled={!hasPatientData}>Print summary</button>
         </div>
         {speechError && <p className="speech-error" role="alert">{speechError}</p>}
       </section>
@@ -279,14 +320,30 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
           </div>
         </section>
 
+        <section className="dashboard-card history-card">
+          <div className="card-heading"><div><p className="section-kicker">Background history</p><h2>Medical, family & personal history</h2></div></div>
+          <dl className="stacked-detail">
+            <div><dt>Past medical history</dt><dd><ListValue items={patient.past_medical_history} /></dd></div>
+            <div><dt>Past surgical history</dt><dd><ListValue items={patient.past_surgical_history} /></dd></div>
+            <div><dt>Family history</dt><dd><ListValue items={patient.family_history} /></dd></div>
+            <div><dt>Diet</dt><dd><SafeValue value={patient.personal_history?.diet} /></dd></div>
+            <div><dt>Tobacco / smoking</dt><dd><SafeValue value={patient.personal_history?.smoking == null ? null : patient.personal_history.smoking ? "Yes" : "No"} /></dd></div>
+            <div><dt>Alcohol</dt><dd><SafeValue value={patient.personal_history?.alcohol == null ? null : patient.personal_history.alcohol ? "Yes" : "No"} /></dd></div>
+            <div><dt>Occupation</dt><dd><SafeValue value={patient.personal_history?.occupation} /></dd></div>
+            <div><dt>Other symptoms review</dt><dd><SafeValue value={patient.review_of_systems} /></dd></div>
+          </dl>
+        </section>
+
         {hasAyushData && (
           <section className="dashboard-card ayush-card">
             <div className="card-heading"><div><p className="section-kicker">AYUSH assessment</p><h2>Constitution & patterns</h2></div><span className="ayush-badge">AYUSH</span></div>
             <dl className="detail-grid ayush-grid">
               <div className="detail-item"><dt>Prakriti</dt><dd><SafeValue value={ayush.prakriti} /></dd></div>
+              <div className="detail-item"><dt>Vikriti</dt><dd><SafeValue value={ayush.vikriti} /></dd></div>
               <div className="detail-item"><dt>Agni</dt><dd><SafeValue value={ayush.agni} /></dd></div>
               <div className="detail-item"><dt>Koshtha</dt><dd><SafeValue value={ayush.koshtha} /></dd></div>
               <div className="detail-item detail-item-wide"><dt>Nidana</dt><dd><SafeValue value={ayush.nidana} /></dd></div>
+              <div className="detail-item detail-item-wide"><dt>Panchakarma history</dt><dd><SafeValue value={ayush.panchakarma_history} /></dd></div>
             </dl>
           </section>
         )}
@@ -309,7 +366,10 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
                     <dl className="stacked-detail dashboard-doc-detail">
                       <div><dt>Diagnoses</dt><dd><ListValue items={doc.extracted_entities?.diagnoses} /></dd></div>
                       <div><dt>Medications</dt><dd><ListValue items={doc.extracted_entities?.medications} /></dd></div>
-                      <div><dt>Lab values</dt><dd><ListValue items={(doc.extracted_entities?.lab_values || []).map((value) => (value && typeof value === "object" ? `${value.name || "Lab value"}: ${[value.value, value.unit].filter(Boolean).join(" ") || "not provided"}${value.flag && value.flag !== "normal" ? ` · ${value.flag}` : ""}` : value))} /></dd></div>
+                      <div><dt>Lab values</dt><dd><ListValue items={normaliseItems(doc.extracted_entities?.lab_values).map((value) => {
+                        const item = typeof value === "string" && value.startsWith("{") ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
+                        return item && typeof item === "object" ? `${item.name || "Lab value"}: ${[item.value, item.unit].filter(Boolean).join(" ") || "not provided"}${item.reference_range ? ` · range ${item.reference_range}` : ""}${item.flag && item.flag !== "normal" ? ` · ${item.flag}` : ""}` : item;
+                      })} /></dd></div>
                     </dl>
                   )}
                 </li>
@@ -367,8 +427,8 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
 
         <section className="dashboard-card abdm-push-card">
           <div className="card-heading"><div><p className="section-kicker">ABDM / Hospital HIS</p><h2>Push structured history</h2></div><span className="card-icon">⇪</span></div>
-          {isSample ? (
-            <p className="trust-metric-note">Open a real patient's interview to push their history - this is disabled for the sample patient.</p>
+          {!hasPatientData || !sessionId ? (
+            <p className="trust-metric-note">Select a patient session before reviewing and pushing its history.</p>
           ) : (
             <>
               <p className="abdm-push-copy">

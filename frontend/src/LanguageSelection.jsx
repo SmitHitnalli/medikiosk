@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { playAudioBlob, stopAllAudio } from "./audio";
 
-const SPEAK_ENDPOINT = "http://localhost:8080/speak";
-const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
+import { apiFetch } from "./api";
 const ENGLISH_PROMPT = "If you want to continue this conversation in English, say English or tap the English button below";
 const HINDI_PROMPT = "Agar aapko baat cheet Hindi mein karni hai to Hindi boliye ya neeche Hindi button dabaiye";
 
-async function requestSpeech(text, language) {
-  const response = await fetch(SPEAK_ENDPOINT, {
+async function requestSpeech(text, language, signal) {
+  const response = await apiFetch("/speak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, language }),
+    signal,
   });
   if (!response.ok) throw new Error("Unable to play the language prompt.");
   return response.blob();
@@ -34,26 +34,29 @@ function LanguageSelection({ onSelect, onBack }) {
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
+  const activeRef = useRef(true);
+  const transcriptionRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     async function playPrompts() {
       try {
-        const englishAudio = await requestSpeech(ENGLISH_PROMPT, "en");
+        const englishAudio = await requestSpeech(ENGLISH_PROMPT, "en", controller.signal);
         if (!cancelled) await playAudioBlob(englishAudio);
       } catch {
         if (!cancelled) setPromptStatus("Choose a language below; the spoken English prompt was unavailable.");
       }
       if (cancelled) return;
       try {
-        const hindiAudio = await requestSpeech(HINDI_PROMPT, "hi");
+        const hindiAudio = await requestSpeech(HINDI_PROMPT, "hi", controller.signal);
         if (!cancelled) {
           // Prefer the real Hindi Piper voice; browser speechSynthesis is now only a
           // last-resort fallback if Piper audio playback itself fails.
           try {
             await playAudioBlob(hindiAudio);
-          } catch {
-            await playHindiPlaceholder(HINDI_PROMPT);
+          } catch (playbackError) {
+            if (!cancelled && playbackError.message !== "Audio playback stopped.") await playHindiPlaceholder(HINDI_PROMPT);
           }
         }
         if (!cancelled) setPromptStatus("Select English or Hindi, or use the voice button.");
@@ -64,14 +67,23 @@ function LanguageSelection({ onSelect, onBack }) {
     void playPrompts();
     return () => {
       cancelled = true;
+      controller.abort();
       stopAllAudio();
       window.speechSynthesis?.cancel();
     };
   }, []);
 
-  useEffect(() => () => {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      transcriptionRef.current?.abort();
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.onstop = null;
+        recorderRef.current.stop();
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
   }, []);
 
   function stopListening() {
@@ -83,18 +95,24 @@ function LanguageSelection({ onSelect, onBack }) {
   }
 
   async function handleRecording(blob) {
+    const controller = new AbortController();
+    transcriptionRef.current?.abort();
+    transcriptionRef.current = controller;
     try {
       const formData = new FormData();
       formData.append("file", blob, "language-choice.webm");
-      const response = await fetch(TRANSCRIBE_ENDPOINT, { method: "POST", body: formData });
+      const response = await apiFetch("/transcribe", { method: "POST", body: formData, signal: controller.signal });
       const result = await response.json();
+      if (!activeRef.current || controller.signal.aborted) return;
       if (!response.ok) throw new Error(result.detail || "Voice selection failed.");
       const transcript = result.text?.toLowerCase() || "";
-      if (transcript.includes("english")) onSelect("en");
-      else if (transcript.includes("hindi")) onSelect("hi");
+      if (transcript.includes("english") || transcript.includes("अंग्रेज")) onSelect("en");
+      else if (transcript.includes("hindi") || transcript.includes("हिंदी") || transcript.includes("हिन्दी")) onSelect("hi");
       else setVoiceError("Please say English or Hindi, then try again.");
     } catch (error) {
-      setVoiceError(error.message || "Unable to understand the language choice.");
+      if (activeRef.current && !controller.signal.aborted) setVoiceError(error.message || "Unable to understand the language choice.");
+    } finally {
+      if (transcriptionRef.current === controller) transcriptionRef.current = null;
     }
   }
 
@@ -105,7 +123,12 @@ function LanguageSelection({ onSelect, onBack }) {
       return;
     }
     try {
+      stopAllAudio();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!activeRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const options = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? { mimeType: "audio/webm;codecs=opus" } : {};
       const recorder = new MediaRecorder(stream, options);
       chunksRef.current = [];

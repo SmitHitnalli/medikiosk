@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { hasRepeatableAudio, repeatLastAudio } from "./audio";
+import { apiFetch, patientHeaders } from "./api";
 
 const TEXT_SIZES = ["normal", "large", "xlarge"];
 const TEXT_SIZE_LABELS = { normal: "A", large: "A+", xlarge: "A++" };
 const STORAGE_KEY_SIZE = "medikiosk-text-size";
 const STORAGE_KEY_CONTRAST = "medikiosk-high-contrast";
-const HELP_REQUEST_ENDPOINT = "http://localhost:8080/nurse-station/help-request";
 // Screens where staff themselves are looking at the alert feed - a "call for
 // help" button there would be noise, not a useful patient-facing control.
 const STAFF_PAGES = new Set(["dashboard", "nurse-station"]);
@@ -39,11 +39,13 @@ function readStoredContrast() {
 // replays whatever prompt audio last played anywhere in the app (see
 // audio.js), and a "help" button that patients can press on any patient-facing
 // screen to notify staff via the Nurse Station alert feed.
-function AccessibilityBar({ sessionId, department, patientName, page }) {
+function AccessibilityBar({ sessionId, sessionToken, page }) {
   const [textSize, setTextSize] = useState(readStoredTextSize);
   const [highContrast, setHighContrast] = useState(readStoredContrast);
   const [canRepeat, setCanRepeat] = useState(hasRepeatableAudio);
   const [helpStatus, setHelpStatus] = useState("idle"); // idle | sending | sent | error
+  const helpTimerRef = useRef(null);
+  const helpRequestRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.dataset.textSize = textSize;
@@ -72,37 +74,52 @@ function AccessibilityBar({ sessionId, department, patientName, page }) {
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    window.clearTimeout(helpTimerRef.current);
+    helpRequestRef.current?.abort();
+    setHelpStatus("idle");
+    return () => {
+      window.clearTimeout(helpTimerRef.current);
+      helpRequestRef.current?.abort();
+    };
+  }, [sessionId]);
+
   function cycleTextSize() {
     setTextSize((current) => TEXT_SIZES[(TEXT_SIZES.indexOf(current) + 1) % TEXT_SIZES.length]);
   }
 
   function handleRepeat() {
-    void repeatLastAudio();
+    void repeatLastAudio().catch(() => {});
   }
 
   async function handleHelp() {
     if (helpStatus === "sending" || helpStatus === "sent") return;
+    const controller = new AbortController();
+    helpRequestRef.current?.abort();
+    helpRequestRef.current = controller;
+    window.clearTimeout(helpTimerRef.current);
     setHelpStatus("sending");
     try {
-      const response = await fetch(HELP_REQUEST_ENDPOINT, {
+      if (!sessionToken) throw new Error("No active patient session");
+      const response = await apiFetch("/nurse-station/help-request", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId || `anon-${Date.now()}`,
-          patient_name: patientName || null,
-          department: department || null,
-        }),
-      });
+        headers: patientHeaders(sessionId, sessionToken, true),
+        body: JSON.stringify({ session_id: sessionId }),
+        signal: controller.signal,
+      }, 10000);
       if (!response.ok) throw new Error("Help request failed");
       setHelpStatus("sent");
-      window.setTimeout(() => setHelpStatus("idle"), 15000);
-    } catch {
+      helpTimerRef.current = window.setTimeout(() => setHelpStatus("idle"), 15000);
+    } catch (error) {
+      if (controller.signal.aborted) return;
       setHelpStatus("error");
-      window.setTimeout(() => setHelpStatus("idle"), 5000);
+      helpTimerRef.current = window.setTimeout(() => setHelpStatus("idle"), 5000);
+    } finally {
+      if (helpRequestRef.current === controller) helpRequestRef.current = null;
     }
   }
 
-  const showHelp = !STAFF_PAGES.has(page);
+  const showHelp = !STAFF_PAGES.has(page) && Boolean(sessionToken);
   const helpLabel =
     helpStatus === "sending" ? "Notifying staff..." : helpStatus === "sent" ? "Staff notified" : helpStatus === "error" ? "Could not reach staff - try again" : "Call for staff help";
 

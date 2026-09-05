@@ -1,30 +1,38 @@
 @echo off
-REM Launches MediKiosk full-screen in kiosk mode: no address bar, no tabs, no
-REM way to navigate away - for the live SIH demo and for how an actual ward
-REM deployment would run. Starts the dev servers first (same as
-REM start-dev.bat) if they aren't already running, waits for them to come up,
-REM then opens the browser locked down.
-REM
-REM To exit kiosk mode: Alt+F4 closes the browser window.
+setlocal
+set "MEDIKIOSK_ROOT=%~dp0"
 
-netstat -ano | findstr ":5173" >nul
-if %errorlevel% neq 0 (
-    echo Starting MediKiosk dev servers...
-    start "MediKiosk Backend" cmd /k "cd /d C:\Smit\medikiosk\backend && .venv\Scripts\uvicorn.exe main:app --reload --port 8080"
-    start "MediKiosk Frontend" cmd /k "cd /d C:\Smit\medikiosk\frontend && npm run dev"
-    echo Waiting for them to come up...
-    timeout /t 10 /nobreak >nul
-) else (
-    echo MediKiosk dev servers already running - reusing them.
+netstat -ano | findstr /R /C:":8080 .*LISTENING" >nul
+if errorlevel 1 (
+    echo Starting MediKiosk backend...
+    start "MediKiosk Backend" cmd /k "cd /d ""%MEDIKIOSK_ROOT%backend"" && .venv\Scripts\uvicorn.exe main:app --reload --host 0.0.0.0 --port 8080"
 )
 
-set CHROME_PATH="%ProgramFiles%\Google\Chrome\Application\chrome.exe"
-if not exist %CHROME_PATH% set CHROME_PATH="%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
-if not exist %CHROME_PATH% set CHROME_PATH="%LocalAppData%\Google\Chrome\Application\chrome.exe"
+netstat -ano | findstr /R /C:":5173 .*LISTENING" >nul
+if errorlevel 1 (
+    echo Starting MediKiosk frontend...
+    start "MediKiosk Frontend" cmd /k "cd /d ""%MEDIKIOSK_ROOT%frontend"" && npm run dev"
+)
 
-if exist %CHROME_PATH% (
-    start "" %CHROME_PATH% --kiosk --incognito --noerrdialogs --disable-pinch --overscroll-history-navigation=0 http://localhost:5173
+echo Waiting for MediKiosk services...
+for /L %%G in (1,1,30) do (
+    powershell -NoProfile -Command "try { if ((Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8080/health -TimeoutSec 1).StatusCode -eq 200 -and (Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173 -TimeoutSec 1).StatusCode -eq 200) { exit 0 } } catch {}; exit 1" >nul 2>&1
+    if not errorlevel 1 goto services_ready
+    timeout /t 1 /nobreak >nul
+)
+echo MediKiosk did not become ready. Check the backend and frontend windows.
+exit /b 1
+
+:services_ready
+set "CHROME_PATH=%ProgramFiles%\Google\Chrome\Application\chrome.exe"
+if not exist "%CHROME_PATH%" set "CHROME_PATH=%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"
+if not exist "%CHROME_PATH%" set "CHROME_PATH=%LocalAppData%\Google\Chrome\Application\chrome.exe"
+
+if exist "%CHROME_PATH%" (
+    start "" "%CHROME_PATH%" --kiosk --incognito --noerrdialogs --disable-pinch --overscroll-history-navigation=0 http://localhost:5173
 ) else (
-    echo Chrome not found at the usual install paths - falling back to Edge.
+    echo Chrome not found; opening Microsoft Edge kiosk mode.
     start "" msedge --kiosk --inprivate --noerrdialogs --edge-kiosk-type=fullscreen http://localhost:5173
 )
+
+endlocal

@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
 import { playAudioBlob, stopAllAudio } from "./audio";
-
-const SPEAK_ENDPOINT = "http://localhost:8080/speak";
-const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
-const REGISTER_ENDPOINT = "http://localhost:8080/patients/register";
-const PATIENTS_ENDPOINT = "http://localhost:8080/patients";
+import { apiFetch, patientHeaders } from "./api";
 
 const PROMPTS = {
   en: "Have you visited us before?",
@@ -23,11 +19,12 @@ function playHindiPlaceholder(text) {
   });
 }
 
-async function speakText(text, language) {
-  const response = await fetch(SPEAK_ENDPOINT, {
+async function speakText(text, language, signal) {
+  const response = await apiFetch("/speak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text, language }),
+    signal,
   });
   if (!response.ok) throw new Error("The spoken prompt was unavailable.");
   const blob = await response.blob();
@@ -42,8 +39,19 @@ async function speakText(text, language) {
   }
 }
 
-function PatientIdentification({ language, interactionMode, onComplete, onBack, onClearData }) {
+function normaliseMediId(value) {
+  const compact = value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return compact.startsWith("MK") ? `MK-${compact.slice(2, 8)}` : compact;
+}
+
+function normalisePhone(value) {
+  const words = { zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9" };
+  return value.toLowerCase().split(/\s+/).map((part) => words[part] ?? part).join("").replace(/\D/g, "");
+}
+
+function PatientIdentification({ language, interactionMode, sessionId, sessionToken, onComplete, onBack, onClearData }) {
   const isSpeakMode = interactionMode === "speak";
+  const isHindi = language === "hi";
   const [step, setStep] = useState("question");
   const [name, setName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -60,6 +68,10 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
   const timeoutRef = useRef(null);
+  const activeRef = useRef(true);
+  const transcriptionRef = useRef(null);
+  const actionRequestRef = useRef(null);
+  const speechRequestRef = useRef(null);
 
   useEffect(() => {
     if (!isSpeakMode) return undefined;
@@ -68,7 +80,7 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
     async function speakQuestion() {
       try {
         const text = PROMPTS[language] || PROMPTS.en;
-        const response = await fetch(SPEAK_ENDPOINT, {
+        const response = await apiFetch("/speak", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text, language: language || "en" }),
@@ -80,7 +92,9 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
           if (language === "hi") {
             // Prefer the real Hindi Piper voice; browser speechSynthesis is now
             // only a last-resort fallback if Piper audio playback itself fails.
-            try { await playAudioBlob(blob); } catch { await playHindiPlaceholder(text); }
+            try { await playAudioBlob(blob); } catch (playbackError) {
+              if (!cancelled && playbackError.message !== "Audio playback stopped.") await playHindiPlaceholder(text);
+            }
           } else {
             await playAudioBlob(blob);
           }
@@ -99,11 +113,21 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
     };
   }, [isSpeakMode, language]);
 
-  useEffect(() => () => {
-    window.clearTimeout(timeoutRef.current);
-    if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    stopAllAudio();
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      transcriptionRef.current?.abort();
+      actionRequestRef.current?.abort();
+      speechRequestRef.current?.abort();
+      window.clearTimeout(timeoutRef.current);
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.onstop = null;
+        recorderRef.current.stop();
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      stopAllAudio();
+    };
   }, []);
 
   function stopListening() {
@@ -116,19 +140,25 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
   }
 
   async function transcribeField(blob, field) {
+    const controller = new AbortController();
+    transcriptionRef.current?.abort();
+    transcriptionRef.current = controller;
     try {
       const formData = new FormData();
       formData.append("file", blob, `patient-${field}.webm`);
-      const response = await fetch(TRANSCRIBE_ENDPOINT, { method: "POST", body: formData });
+      const response = await apiFetch("/transcribe", { method: "POST", body: formData, signal: controller.signal });
       const result = await response.json();
+      if (!activeRef.current || controller.signal.aborted) return;
       if (!response.ok) throw new Error(result.detail || "Voice input failed.");
       const transcript = result.text?.trim() || "";
       if (!transcript) throw new Error("No speech was detected. Please try again.");
       if (field === "name") setName(transcript);
-      if (field === "phone") setPhoneNumber(transcript);
-      if (field === "mediId") setMediId(transcript.toUpperCase().replace(/\s+/g, ""));
+      if (field === "phone") setPhoneNumber(normalisePhone(transcript));
+      if (field === "mediId") setMediId(normaliseMediId(transcript));
     } catch (requestError) {
-      setError(requestError.message || "Unable to understand the voice input.");
+      if (activeRef.current && !controller.signal.aborted) setError(requestError.message || "Unable to understand the voice input.");
+    } finally {
+      if (transcriptionRef.current === controller) transcriptionRef.current = null;
     }
   }
 
@@ -139,7 +169,12 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
       return;
     }
     try {
+      stopAllAudio();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!activeRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const options = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? { mimeType: "audio/webm;codecs=opus" } : {};
       const recorder = new MediaRecorder(stream, options);
       chunksRef.current = [];
@@ -165,29 +200,44 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
     setStep(hasVisited ? "returning" : "new");
   }
 
+  function speakForScreen(text) {
+    const controller = new AbortController();
+    speechRequestRef.current?.abort();
+    speechRequestRef.current = controller;
+    void speakText(text, language || "en", controller.signal).catch(() => {}).finally(() => {
+      if (speechRequestRef.current === controller) speechRequestRef.current = null;
+    });
+  }
+
   async function registerPatient(event) {
     event.preventDefault();
-    if (!name.trim() || !phoneNumber.trim()) {
-      setError("Please provide both your name and phone number.");
+    if (name.trim().length < 2 || normalisePhone(phoneNumber).length < 10) {
+      setError("Please provide your name and a valid 10-digit phone number.");
       return;
     }
     setIsBusy(true);
     setError("");
+    const controller = new AbortController();
+    actionRequestRef.current?.abort();
+    actionRequestRef.current = controller;
     try {
-      const response = await fetch(REGISTER_ENDPOINT, {
+      const response = await apiFetch("/patients/register", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), phone_number: phoneNumber.trim() }),
-      });
+        headers: patientHeaders(sessionId, sessionToken, true),
+        body: JSON.stringify({ name: name.trim(), phone_number: normalisePhone(phoneNumber) }),
+        signal: controller.signal,
+      }, 10000);
       const result = await response.json();
+      if (!activeRef.current || controller.signal.aborted) return;
       if (!response.ok) throw new Error(result.detail || "Registration failed.");
       setRegisteredId(result.medi_id);
       setStep("registered");
-      if (isSpeakMode) void speakText(`Your Medi ID is ${result.medi_id}. Please remember it. It will also be printed on your summary for next time.`, language || "en").catch(() => {});
+      if (isSpeakMode) speakForScreen(language === "hi" ? `आपकी मेडी आईडी ${result.medi_id} है। कृपया इसे याद रखें।` : `Your Medi ID is ${result.medi_id}. Please remember it. It will also be printed on your summary for next time.`);
     } catch (requestError) {
-      setError(requestError.message || "Unable to register this patient.");
+      if (activeRef.current && !controller.signal.aborted) setError(requestError.message || "Unable to register this patient.");
     } finally {
-      setIsBusy(false);
+      if (activeRef.current && !controller.signal.aborted) setIsBusy(false);
+      if (actionRequestRef.current === controller) actionRequestRef.current = null;
     }
   }
 
@@ -197,12 +247,21 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
       setError("Please enter your Medi ID.");
       return;
     }
+    if (failedAttempts >= 3) return;
     setIsBusy(true);
     setError("");
+    const controller = new AbortController();
+    actionRequestRef.current?.abort();
+    actionRequestRef.current = controller;
     try {
-      const response = await fetch(`${PATIENTS_ENDPOINT}/${encodeURIComponent(mediId.trim().toUpperCase())}`);
+      const response = await apiFetch(`/patients/${encodeURIComponent(normaliseMediId(mediId))}`, {
+        headers: patientHeaders(sessionId, sessionToken),
+        signal: controller.signal,
+      }, 10000);
       const result = await response.json();
+      if (!activeRef.current || controller.signal.aborted) return;
       if (!response.ok) {
+        if (response.status !== 404) throw new Error(result.detail || "The patient registry is unavailable. Please try again.");
         const attempts = failedAttempts + 1;
         setFailedAttempts(attempts);
         throw new Error(attempts >= 3 ? "We could not find that Medi ID after three attempts. Please ask a staff member for help." : "We could not find that Medi ID. Please check it and try again.");
@@ -217,12 +276,13 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
         returning_patient: true,
       });
       setStep("welcome");
-      if (isSpeakMode) void speakText(`Welcome back, ${result.name}.`, language || "en").catch(() => {});
+      if (isSpeakMode) speakForScreen(language === "hi" ? `फिर से स्वागत है, ${result.name}।` : `Welcome back, ${result.name}.`);
       setMediId(result.medi_id);
     } catch (requestError) {
-      setError(requestError.message || "Unable to look up that Medi ID.");
+      if (activeRef.current && !controller.signal.aborted) setError(requestError.message || "Unable to look up that Medi ID.");
     } finally {
-      setIsBusy(false);
+      if (activeRef.current && !controller.signal.aborted) setIsBusy(false);
+      if (actionRequestRef.current === controller) actionRequestRef.current = null;
     }
   }
 
@@ -233,7 +293,7 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
   }
 
   function finishNewPatient() {
-    onComplete({ medi_id: registeredId, name: name.trim(), phone_number: phoneNumber.trim(), prakriti: null, returning_patient: false });
+    onComplete({ medi_id: registeredId, name: name.trim(), phone_number: normalisePhone(phoneNumber), prakriti: null, returning_patient: false });
   }
 
   const prompt = PROMPTS[language] || PROMPTS.en;
@@ -241,52 +301,52 @@ function PatientIdentification({ language, interactionMode, onComplete, onBack, 
     <main className="start-shell">
       <section className="start-card patient-id-card" aria-label="Patient identification">
         <div className="brand-mark small" aria-hidden="true">M</div>
-        <p className="start-eyebrow">MediKiosk · Patient identification</p>
+        <p className="start-eyebrow">MediKiosk · {isHindi ? "रोगी की पहचान" : "Patient identification"}</p>
         {step === "question" && <>
           <h1>{prompt}</h1>
           <div className="language-buttons patient-choice-buttons">
-            <button className="language-button" type="button" onClick={() => chooseVisit(true)}>Yes, I have a Medi ID</button>
-            <button className="language-button" type="button" onClick={() => chooseVisit(false)}>No, this is my first visit</button>
+            <button className="language-button" type="button" onClick={() => chooseVisit(true)}>{isHindi ? "हाँ, मेरे पास मेडी आईडी है" : "Yes, I have a Medi ID"}</button>
+            <button className="language-button" type="button" onClick={() => chooseVisit(false)}>{isHindi ? "नहीं, यह मेरी पहली मुलाकात है" : "No, this is my first visit"}</button>
           </div>
         </>}
         {step === "new" && <>
-          <h1>Let’s create your Medi ID</h1>
-          <p className="start-copy">Please enter your details. {isSpeakMode ? "You can use the voice buttons or type instead." : "Your details will be used to register this visit."}</p>
+          <h1>{isHindi ? "अपनी मेडी आईडी बनाएँ" : "Let’s create your Medi ID"}</h1>
+          <p className="start-copy">{isHindi ? "अपना विवरण भरें।" : "Please enter your details."} {isSpeakMode ? (isHindi ? "आप आवाज़ वाले बटन या टाइपिंग का उपयोग कर सकते हैं।" : "You can use the voice buttons or type instead.") : (isHindi ? "इस मुलाकात को दर्ज करने के लिए इस विवरण का उपयोग होगा।" : "Your details will be used to register this visit.")}</p>
           <form className="patient-form" onSubmit={registerPatient}>
-            <label>Name<input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>
-            {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "name" ? stopListening() : startListening("name")}>{recordingField === "name" ? "Stop name recording" : "🎙 Say your name"}</button>}
-            <label>Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} inputMode="tel" autoComplete="tel" /></label>
-            {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "phone" ? stopListening() : startListening("phone")}>{recordingField === "phone" ? "Stop phone recording" : "🎙 Say your phone number"}</button>}
-            {recordingField && <p className="recording-status patient-recording"><span className="recording-dot" /> Listening...</p>}
-            <button className="start-button" type="submit" disabled={isBusy}>{isBusy ? "Registering..." : "Create Medi ID"}</button>
+            <label>{isHindi ? "नाम" : "Name"}<input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>
+            {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "name" ? stopListening() : startListening("name")}>{recordingField === "name" ? (isHindi ? "नाम रिकॉर्ड करना बंद करें" : "Stop name recording") : (isHindi ? "🎙 अपना नाम बोलें" : "🎙 Say your name")}</button>}
+            <label>{isHindi ? "फ़ोन नंबर" : "Phone number"}<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} inputMode="tel" autoComplete="tel" /></label>
+            {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "phone" ? stopListening() : startListening("phone")}>{recordingField === "phone" ? (isHindi ? "फ़ोन रिकॉर्ड करना बंद करें" : "Stop phone recording") : (isHindi ? "🎙 अपना फ़ोन नंबर बोलें" : "🎙 Say your phone number")}</button>}
+            {recordingField && <p className="recording-status patient-recording"><span className="recording-dot" /> {isHindi ? "सुन रहे हैं..." : "Listening..."}</p>}
+            <button className="start-button" type="submit" disabled={isBusy}>{isBusy ? (isHindi ? "दर्ज हो रहा है..." : "Registering...") : (isHindi ? "मेडी आईडी बनाएँ" : "Create Medi ID")}</button>
           </form>
         </>}
         {step === "registered" && <>
-          <h1>Your Medi ID is</h1>
+          <h1>{isHindi ? "आपकी मेडी आईडी है" : "Your Medi ID is"}</h1>
           <p className="medi-id-value">{registeredId}</p>
-          <p className="start-copy">Please remember this ID. It will also be printed on your summary for next time.</p>
-          <button className="start-button" type="button" onClick={finishNewPatient}>Continue</button>
+          <p className="start-copy">{isHindi ? "इस आईडी को याद रखें। अगली बार के लिए यह आपके सारांश पर भी छपेगी।" : "Please remember this ID. It will also be printed on your summary for next time."}</p>
+          <button className="start-button" type="button" onClick={finishNewPatient}>{isHindi ? "आगे बढ़ें" : "Continue"}</button>
         </>}
         {step === "returning" && <>
-          <h1>Welcome back</h1>
-          <p className="start-copy">Enter or say your Medi ID so we can find your details.</p>
+          <h1>{isHindi ? "फिर से स्वागत है" : "Welcome back"}</h1>
+          <p className="start-copy">{isHindi ? "अपना विवरण खोजने के लिए मेडी आईडी लिखें या बोलें।" : "Enter or say your Medi ID so we can find your details."}</p>
           <form className="patient-form" onSubmit={findPatient}>
             <label>Medi ID<input value={mediId} onChange={(event) => setMediId(event.target.value.toUpperCase())} placeholder="MK-ABC123" autoCapitalize="characters" /></label>
-            {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "mediId" ? stopListening() : startListening("mediId")}>{recordingField === "mediId" ? "Stop ID recording" : "🎙 Say your Medi ID"}</button>}
-            <button className="start-button" type="submit" disabled={isBusy}>{isBusy ? "Checking..." : "Find my Medi ID"}</button>
+            {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "mediId" ? stopListening() : startListening("mediId")}>{recordingField === "mediId" ? (isHindi ? "आईडी रिकॉर्ड करना बंद करें" : "Stop ID recording") : (isHindi ? "🎙 अपनी मेडी आईडी बोलें" : "🎙 Say your Medi ID")}</button>}
+            <button className="start-button" type="submit" disabled={isBusy || failedAttempts >= 3}>{isBusy ? (isHindi ? "जाँच हो रही है..." : "Checking...") : failedAttempts >= 3 ? (isHindi ? "खोज बंद है" : "Lookup locked") : (isHindi ? "मेरी मेडी आईडी खोजें" : "Find my Medi ID")}</button>
           </form>
-          {failedAttempts >= 3 && <button className="field-voice-button" type="button" onClick={continueAsNewPatient}>Continue as a new patient</button>}
+          {failedAttempts >= 3 && <button className="field-voice-button" type="button" onClick={continueAsNewPatient}>{isHindi ? "नए रोगी के रूप में आगे बढ़ें" : "Continue as a new patient"}</button>}
         </>}
         {step === "welcome" && <>
-        <h1>Welcome back, {welcomeName}</h1>
-          <p className="start-copy">Your details have been found. Let’s continue.</p>
-          <button className="start-button" type="button" onClick={() => onComplete(foundPatient)}>Continue</button>
+        <h1>{isHindi ? `फिर से स्वागत है, ${welcomeName}` : `Welcome back, ${welcomeName}`}</h1>
+          <p className="start-copy">{isHindi ? "आपका विवरण मिल गया है। आगे बढ़ें।" : "Your details have been found. Let’s continue."}</p>
+          <button className="start-button" type="button" onClick={() => onComplete(foundPatient)}>{isHindi ? "आगे बढ़ें" : "Continue"}</button>
         </>}
         {error && <p className="language-error" role="alert">{error}</p>}
         {status && <p className="prompt-status">{status}</p>}
-        {step !== "question" && <button className="secondary-start-button" type="button" onClick={() => { setError(""); setStep("question"); }}>Back</button>}
-        <button className="secondary-start-button" type="button" onClick={onBack}>Back to consent</button>
-        <ClearDataButton onClearData={onClearData} />
+        {step !== "question" && <button className="secondary-start-button" type="button" onClick={() => { setError(""); setStep("question"); }}>{isHindi ? "वापस" : "Back"}</button>}
+        <button className="secondary-start-button" type="button" onClick={onBack}>{isHindi ? "सहमति पर वापस जाएँ" : "Back to consent"}</button>
+        <ClearDataButton language={language} onClearData={onClearData} />
       </section>
     </main>
   );

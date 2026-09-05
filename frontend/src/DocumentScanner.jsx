@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
 import { playAudioBlob, stopAllAudio } from "./audio";
-
-const OCR_ENDPOINT = "http://localhost:8080/ocr";
-const SPEAK_ENDPOINT = "http://localhost:8080/speak";
+import { apiFetch } from "./api";
 
 const SCAN_PROMPTS = {
   en: "You can scan any prescriptions, lab reports, or discharge summaries you have. Tap Scan a document to begin, or Done if you have none.",
@@ -14,6 +12,11 @@ const DOC_TYPE_LABELS = {
   prescription: "Prescription",
   lab_report: "Lab report",
   discharge_summary: "Discharge summary",
+};
+const DOC_TYPE_LABELS_HI = {
+  prescription: "नुस्खा",
+  lab_report: "लैब रिपोर्ट",
+  discharge_summary: "डिस्चार्ज समरी",
 };
 
 function playHindiPlaceholder(text) {
@@ -45,14 +48,27 @@ function summariseEntities(entities) {
 
 // Guided multi-document scanning with a confidence-based fallback chain:
 // fuzzy match (backend) -> ask patient to confirm -> mark illegible.
-function DocumentScanner({ language, interactionMode, initialDocuments, onDone, onBack, onClearData }) {
+function DocumentScanner({ language, interactionMode, initialDocuments, onDocumentsChange, onDone, onBack, onClearData }) {
   const isSpeakMode = interactionMode === "speak";
+  const isHindi = language === "hi";
+  const docLabels = isHindi ? DOC_TYPE_LABELS_HI : DOC_TYPE_LABELS;
   const prompt = SCAN_PROMPTS[language] || SCAN_PROMPTS.en;
   const [documents, setDocuments] = useState(initialDocuments || []);
   const [stage, setStage] = useState("idle"); // idle | uploading | review
   const [pendingResult, setPendingResult] = useState(null);
+  const [documentDate, setDocumentDate] = useState("");
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
+  const activeRef = useRef(true);
+  const uploadRequestRef = useRef(null);
+
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      uploadRequestRef.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (!isSpeakMode) return undefined;
@@ -60,7 +76,7 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
     const controller = new AbortController();
     async function speakPrompt() {
       try {
-        const response = await fetch(SPEAK_ENDPOINT, {
+        const response = await apiFetch("/speak", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: prompt, language: language || "en" }),
@@ -72,13 +88,17 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
           if (language === "hi") {
             // Prefer the real Hindi Piper voice; browser speechSynthesis is now
             // only a last-resort fallback if Piper audio playback itself fails.
-            try { await playAudioBlob(audioBlob); } catch { await playHindiPlaceholder(prompt); }
+            try { await playAudioBlob(audioBlob); } catch (playbackError) {
+              if (!cancelled && playbackError.message !== "Audio playback stopped.") await playHindiPlaceholder(prompt);
+            }
           } else {
             await playAudioBlob(audioBlob);
           }
         }
       } catch (speakError) {
-        if (!cancelled && speakError.name !== "AbortError" && speakError.message !== "Audio playback stopped.") return;
+        if (!cancelled && speakError.name !== "AbortError" && speakError.message !== "Audio playback stopped.") {
+          setError("Please choose an option below.");
+        }
       }
     }
     void speakPrompt();
@@ -89,20 +109,32 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
     };
   }, [isSpeakMode, language, prompt]);
 
+  useEffect(() => {
+    onDocumentsChange?.(documents);
+  }, [documents, onDocumentsChange]);
+
   async function uploadFile(file) {
+    const controller = new AbortController();
+    uploadRequestRef.current?.abort();
+    uploadRequestRef.current = controller;
     setStage("uploading");
     setError("");
     try {
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch(OCR_ENDPOINT, { method: "POST", body: formData });
+      const response = await apiFetch("/ocr", { method: "POST", body: formData, signal: controller.signal });
       const result = await response.json();
+      if (!activeRef.current || controller.signal.aborted) return;
       if (!response.ok) throw new Error(result.detail || "The document could not be processed.");
       setPendingResult(result);
       setStage("review");
     } catch (requestError) {
-      setError(requestError.message || "Unable to process the document.");
-      setStage("idle");
+      if (activeRef.current && !controller.signal.aborted) {
+        setError(requestError.message || "Unable to process the document.");
+        setStage("idle");
+      }
+    } finally {
+      if (uploadRequestRef.current === controller) uploadRequestRef.current = null;
     }
   }
 
@@ -119,11 +151,13 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
       {
         id: createDocId(),
         doc_type: docType,
+        date: documentDate,
         status,
         extracted_entities: pendingResult?.extracted_entities || { diagnoses: [], medications: [], lab_values: [] },
       },
     ]);
     setPendingResult(null);
+    setDocumentDate("");
     setStage("idle");
   }
 
@@ -133,11 +167,13 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
       {
         id: createDocId(),
         doc_type: null,
+        date: documentDate,
         status: "illegible",
         extracted_entities: { diagnoses: [], medications: [], lab_values: [] },
       },
     ]);
     setPendingResult(null);
+    setDocumentDate("");
     setStage("idle");
   }
 
@@ -155,7 +191,7 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
     <main className="start-shell">
       <section className="start-card scanner-card" aria-label="Document scanning">
         <div className="brand-mark small" aria-hidden="true">M</div>
-        <p className="start-eyebrow">MediKiosk · Documents</p>
+        <p className="start-eyebrow">MediKiosk · {isHindi ? "दस्तावेज़" : "Documents"}</p>
         <h1>{prompt}</h1>
 
         {documents.length > 0 && (
@@ -163,10 +199,10 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
             {documents.map((doc) => (
               <li className={`scanner-doc-chip ${doc.status === "illegible" ? "illegible" : ""}`} key={doc.id}>
                 <span className="scanner-doc-type">
-                  {doc.status === "illegible" ? "Unreadable" : DOC_TYPE_LABELS[doc.doc_type] || "Document"}
+                  {doc.status === "illegible" ? (isHindi ? "पढ़ने योग्य नहीं" : "Unreadable") : docLabels[doc.doc_type] || (isHindi ? "दस्तावेज़" : "Document")}
                 </span>
                 <span className="scanner-doc-summary">
-                  {doc.status === "illegible" ? "Please show this to the nurse" : summariseEntities(doc.extracted_entities)}
+                  {doc.status === "illegible" ? (isHindi ? "इसे नर्स को दिखाएँ" : "Please show this to the nurse") : summariseEntities(doc.extracted_entities)}
                 </span>
                 <button type="button" className="scanner-doc-remove" onClick={() => removeDocument(doc.id)} aria-label="Remove this document">✕</button>
               </li>
@@ -174,31 +210,35 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
           </ul>
         )}
 
+        <input ref={fileInputRef} className="visually-hidden" type="file" accept="image/*" capture="environment" onChange={handleFileSelected} />
         {stage === "idle" && (
           <div className="scanner-actions">
-            <input ref={fileInputRef} className="visually-hidden" type="file" accept="image/*" capture="environment" onChange={handleFileSelected} />
             <button className="start-button scanner-scan-button" type="button" onClick={() => fileInputRef.current?.click()}>
-              Scan a document
+              {isHindi ? "दस्तावेज़ स्कैन करें" : "Scan a document"}
             </button>
           </div>
         )}
 
-        {stage === "uploading" && <p className="scanner-status">Reading your document...</p>}
+        {stage === "uploading" && <p className="scanner-status">{isHindi ? "दस्तावेज़ पढ़ा जा रहा है..." : "Reading your document..."}</p>}
 
         {stage === "review" && pendingResult && (
           <div className="scanner-review">
+            <label className="scanner-date-label">
+              {isHindi ? "दस्तावेज़ की तारीख (यदि लिखी हो)" : "Document date (if shown)"}
+              <input type="date" value={documentDate} onChange={(event) => setDocumentDate(event.target.value)} />
+            </label>
             {pendingResult.status === "confident" && (
               <>
                 <p className="scanner-review-heading">
-                  This looks like a <strong>{DOC_TYPE_LABELS[pendingResult.suggested_doc_type] || "document"}</strong>.
+                  {isHindi ? "यह " : "This looks like a "}<strong>{docLabels[pendingResult.suggested_doc_type] || (isHindi ? "दस्तावेज़" : "document")}</strong>{isHindi ? " लगता है।" : "."}
                 </p>
                 <p className="scanner-review-detail">{summariseEntities(pendingResult.extracted_entities)}</p>
                 <div className="scanner-type-buttons">
                   <button className="voice-choice-button" type="button" onClick={() => addDocument(pendingResult.suggested_doc_type, "confident")}>
-                    Add this document
+                    {isHindi ? "यह दस्तावेज़ जोड़ें" : "Add this document"}
                   </button>
                   <button className="secondary-start-button" type="button" onClick={() => setPendingResult({ ...pendingResult, status: "needs_confirmation" })}>
-                    That's not right
+                    {isHindi ? "यह सही नहीं है" : "That's not right"}
                   </button>
                 </div>
               </>
@@ -206,28 +246,28 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
 
             {pendingResult.status === "needs_confirmation" && (
               <>
-                <p className="scanner-review-heading">We couldn't confidently tell what kind of document this is.</p>
-                <p className="scanner-review-detail">What kind of document did you scan?</p>
+                <p className="scanner-review-heading">{isHindi ? "हम दस्तावेज़ का प्रकार निश्चित रूप से नहीं पहचान सके।" : "We couldn't confidently tell what kind of document this is."}</p>
+                <p className="scanner-review-detail">{isHindi ? "आपने किस प्रकार का दस्तावेज़ स्कैन किया?" : "What kind of document did you scan?"}</p>
                 <div className="scanner-type-buttons">
-                  {Object.entries(DOC_TYPE_LABELS).map(([value, label]) => (
+                  {Object.entries(docLabels).map(([value, label]) => (
                     <button className="voice-choice-button" type="button" key={value} onClick={() => addDocument(value, "confirmed")}>
                       {label}
                     </button>
                   ))}
                 </div>
                 <button className="secondary-start-button" type="button" onClick={markIllegible}>
-                  This document is unreadable
+                  {isHindi ? "यह दस्तावेज़ पढ़ने योग्य नहीं है" : "This document is unreadable"}
                 </button>
               </>
             )}
 
             {pendingResult.status === "illegible" && (
               <>
-                <p className="scanner-review-heading">We couldn't read this document clearly.</p>
-                <p className="scanner-review-detail">You can try a clearer photo, or mark it as unreadable and continue - the nurse can review the physical copy.</p>
+                <p className="scanner-review-heading">{isHindi ? "हम इस दस्तावेज़ को साफ़ नहीं पढ़ सके।" : "We couldn't read this document clearly."}</p>
+                <p className="scanner-review-detail">{isHindi ? "अधिक साफ़ फोटो लें, या इसे पढ़ने योग्य नहीं मानकर आगे बढ़ें। नर्स मूल प्रति देख सकती है।" : "You can try a clearer photo, or mark it as unreadable and continue - the nurse can review the physical copy."}</p>
                 <div className="scanner-type-buttons">
-                  <button className="voice-choice-button" type="button" onClick={retakePhoto}>Try a clearer photo</button>
-                  <button className="secondary-start-button" type="button" onClick={markIllegible}>Mark as unreadable and continue</button>
+                  <button className="voice-choice-button" type="button" onClick={retakePhoto}>{isHindi ? "अधिक साफ़ फोटो लें" : "Try a clearer photo"}</button>
+                  <button className="secondary-start-button" type="button" onClick={markIllegible}>{isHindi ? "पढ़ने योग्य नहीं मानकर आगे बढ़ें" : "Mark as unreadable and continue"}</button>
                 </div>
               </>
             )}
@@ -237,12 +277,12 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDone, 
         {error && <p className="language-error" role="alert">{error}</p>}
 
         <div className="scanner-footer">
-          <button className="start-button" type="button" onClick={() => onDone(documents)}>
-            {documents.length > 0 ? `Done (${documents.length} scanned)` : "Done · no documents to scan"}
+          <button className="start-button" type="button" disabled={stage !== "idle"} onClick={() => onDone(documents)}>
+            {documents.length > 0 ? (isHindi ? `हो गया (${documents.length} स्कैन किए)` : `Done (${documents.length} scanned)`) : (isHindi ? "हो गया · कोई दस्तावेज़ नहीं" : "Done · no documents to scan")}
           </button>
-          <button className="secondary-start-button" type="button" onClick={onBack}>Back to interview</button>
+          <button className="secondary-start-button" type="button" disabled={stage === "uploading"} onClick={onBack}>{isHindi ? "साक्षात्कार पर वापस जाएँ" : "Back to interview"}</button>
         </div>
-        <ClearDataButton onClearData={onClearData} />
+        <ClearDataButton language={language} onClearData={onClearData} />
       </section>
     </main>
   );

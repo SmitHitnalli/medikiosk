@@ -5,6 +5,12 @@ How to run MediKiosk the way an actual ward deployment (or the live SIH demo) wo
 ## Quick start
 Double-click `kiosk-mode.bat` in the repo root. It starts the backend and frontend dev servers if they aren't already running, waits for them to come up, then opens the app in Chrome's `--kiosk` mode (falls back to Edge if Chrome isn't installed).
 
+The launcher checks ports 8080 and 5173 independently and fails clearly if both services are not ready within 30 seconds. Paths are resolved from the script location, so the repository can be moved. Vite is pinned to port 5173 rather than silently selecting a different port.
+
+For another device on the same private network, open `http://<kiosk-host>:5173`; the frontend automatically calls port 8080 on that same host and the backend accepts private-LAN Vite origins. Set `VITE_API_URL` before starting Vite when the API lives at a different origin.
+
+Run `run_smoke_test.bat` while the backend and Ollama are running to execute the fast isolated regression suite followed by the real Ollama, EasyOCR, Whisper, and Piper workflow. Its generated visit, alert, export, and registry test record are cleaned up afterward.
+
 **To exit:** Alt+F4 closes the kiosk browser window. There's no in-app way out by design - that's the point of kiosk mode.
 
 ## What kiosk-mode.bat does *not* do

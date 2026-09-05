@@ -1,6 +1,5 @@
 import { useState } from "react";
-
-const VERIFY_PIN_ENDPOINT = "http://localhost:8080/staff/verify-pin";
+import { apiFetch } from "./api";
 
 // Hackathon-simple staff gate: one shared PIN, verified server-side (backend/.env
 // STAFF_PIN) so it isn't just sitting in the frontend bundle. Not real per-user
@@ -16,7 +15,7 @@ function StaffPinGate({ onSuccess, onBack }) {
     setIsVerifying(true);
     setError("");
     try {
-      const response = await fetch(VERIFY_PIN_ENDPOINT, {
+      const response = await apiFetch("/staff/verify-pin", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pin: pin.trim() }),
@@ -25,7 +24,8 @@ function StaffPinGate({ onSuccess, onBack }) {
         const result = await response.json().catch(() => ({}));
         throw new Error(result.detail || "Incorrect PIN.");
       }
-      onSuccess();
+      const result = await response.json();
+      onSuccess(result.token);
     } catch (verifyError) {
       setError(verifyError.message || "Unable to verify the PIN.");
       setPin("");

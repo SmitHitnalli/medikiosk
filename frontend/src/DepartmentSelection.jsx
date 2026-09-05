@@ -1,18 +1,17 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
 import { playAudioBlob, stopAllAudio } from "./audio";
-
-const SPEAK_ENDPOINT = "http://localhost:8080/speak";
+import { apiFetch } from "./api";
 const DEPARTMENT_PROMPTS = {
   en: "Which department are you visiting today?",
   hi: "आप आज किस विभाग में आए हैं?",
 };
 const DEPARTMENTS = [
-  ["Kayachikitsa", "Kayachikitsa"],
-  ["Panchakarma", "Panchakarma"],
-  ["Shalya", "Shalya"],
-  ["Prasuti Tantra", "Prasuti Tantra"],
-  ["Not sure / General consultation", "general"],
+  ["Kayachikitsa", "कायचिकित्सा", "Kayachikitsa"],
+  ["Panchakarma", "पंचकर्म", "Panchakarma"],
+  ["Shalya", "शल्य", "Shalya"],
+  ["Prasuti Tantra", "प्रसूति तंत्र", "Prasuti Tantra"],
+  ["Not sure / General consultation", "निश्चित नहीं / सामान्य परामर्श", "general"],
 ];
 
 function playHindiPlaceholder(text) {
@@ -28,7 +27,9 @@ function playHindiPlaceholder(text) {
 
 function DepartmentSelection({ language, interactionMode, onSelect, onBack, onClearData }) {
   const isSpeakMode = interactionMode === "speak";
+  const isHindi = language === "hi";
   const prompt = DEPARTMENT_PROMPTS[language] || DEPARTMENT_PROMPTS.en;
+  const [promptStatus, setPromptStatus] = useState("");
 
   useEffect(() => {
     if (!isSpeakMode) return undefined;
@@ -36,7 +37,7 @@ function DepartmentSelection({ language, interactionMode, onSelect, onBack, onCl
     const controller = new AbortController();
     async function speakPrompt() {
       try {
-        const response = await fetch(SPEAK_ENDPOINT, {
+        const response = await apiFetch("/speak", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: prompt, language: language || "en" }),
@@ -48,13 +49,17 @@ function DepartmentSelection({ language, interactionMode, onSelect, onBack, onCl
           if (language === "hi") {
             // Prefer the real Hindi Piper voice; browser speechSynthesis is now
             // only a last-resort fallback if Piper audio playback itself fails.
-            try { await playAudioBlob(audioBlob); } catch { await playHindiPlaceholder(prompt); }
+            try { await playAudioBlob(audioBlob); } catch (playbackError) {
+              if (!cancelled && playbackError.message !== "Audio playback stopped.") await playHindiPlaceholder(prompt);
+            }
           } else {
             await playAudioBlob(audioBlob);
           }
         }
       } catch (error) {
-        if (!cancelled && error.name !== "AbortError" && error.message !== "Audio playback stopped.") return;
+        if (!cancelled && error.name !== "AbortError" && error.message !== "Audio playback stopped.") {
+          setPromptStatus("Please choose your department below.");
+        }
       }
     }
     void speakPrompt();
@@ -69,15 +74,16 @@ function DepartmentSelection({ language, interactionMode, onSelect, onBack, onCl
     <main className="start-shell">
       <section className="start-card department-card" aria-label="Department selection">
         <div className="brand-mark small" aria-hidden="true">M</div>
-        <p className="start-eyebrow">MediKiosk · Department</p>
+        <p className="start-eyebrow">MediKiosk · {isHindi ? "विभाग" : "Department"}</p>
         <h1>{prompt}</h1>
+        {promptStatus && <p className="language-error" role="status">{promptStatus}</p>}
         <div className="department-grid">
-          {DEPARTMENTS.map(([label, value]) => (
-            <button className="department-button" type="button" key={value} onClick={() => onSelect(value)}>{label}</button>
+          {DEPARTMENTS.map(([label, hindiLabel, value]) => (
+            <button className="department-button" type="button" key={value} onClick={() => onSelect(value)}>{isHindi ? hindiLabel : label}</button>
           ))}
         </div>
-        <button className="secondary-start-button" type="button" onClick={onBack}>Back to patient identification</button>
-        <ClearDataButton onClearData={onClearData} />
+        <button className="secondary-start-button" type="button" onClick={onBack}>{isHindi ? "रोगी की पहचान पर वापस जाएँ" : "Back to patient identification"}</button>
+        <ClearDataButton language={language} onClearData={onClearData} />
       </section>
     </main>
   );

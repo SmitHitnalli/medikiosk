@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { playAudioBlob, stopAllAudio } from "./audio";
-
-const SPEAK_ENDPOINT = "http://localhost:8080/speak";
-const TRANSCRIBE_ENDPOINT = "http://localhost:8080/transcribe";
+import { apiFetch } from "./api";
 const MODE_PROMPTS = {
   en: "Would you like to speak with me, or type your answers? Say Speak or Chat, or tap a button below.",
   hi: "क्या आप मुझसे बोलकर बात करना चाहेंगे या अपने जवाब टाइप करना चाहेंगे? बोलकर बात करने के लिए Speak या टाइप करने के लिए Chat कहें, या नीचे दिए बटन को दबाएं।",
@@ -21,19 +19,22 @@ function playHindiPlaceholder(text) {
 
 function ModeSelection({ language, onSelect, onBack }) {
   const prompt = MODE_PROMPTS[language] || MODE_PROMPTS.en;
+  const isHindi = language === "hi";
   const [isListening, setIsListening] = useState(false);
   const [error, setError] = useState("");
   const recorderRef = useRef(null);
   const streamRef = useRef(null);
   const chunksRef = useRef([]);
   const timeoutRef = useRef(null);
+  const activeRef = useRef(true);
+  const transcriptionRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
     async function speakPrompt() {
       try {
-        const response = await fetch(SPEAK_ENDPOINT, {
+        const response = await apiFetch("/speak", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: prompt, language: language || "en" }),
@@ -47,8 +48,8 @@ function ModeSelection({ language, onSelect, onBack }) {
             // only a last-resort fallback if Piper audio playback itself fails.
             try {
               await playAudioBlob(audioBlob);
-            } catch {
-              await playHindiPlaceholder(prompt);
+            } catch (playbackError) {
+              if (!cancelled && playbackError.message !== "Audio playback stopped.") await playHindiPlaceholder(prompt);
             }
           } else {
             await playAudioBlob(audioBlob);
@@ -68,11 +69,19 @@ function ModeSelection({ language, onSelect, onBack }) {
     };
   }, [language, prompt]);
 
-  useEffect(() => () => {
-    window.clearTimeout(timeoutRef.current);
-    if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    stopAllAudio();
+  useEffect(() => {
+    activeRef.current = true;
+    return () => {
+      activeRef.current = false;
+      transcriptionRef.current?.abort();
+      window.clearTimeout(timeoutRef.current);
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.onstop = null;
+        recorderRef.current.stop();
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      stopAllAudio();
+    };
   }, []);
 
   function stopListening() {
@@ -85,18 +94,24 @@ function ModeSelection({ language, onSelect, onBack }) {
   }
 
   async function transcribeChoice(blob) {
+    const controller = new AbortController();
+    transcriptionRef.current?.abort();
+    transcriptionRef.current = controller;
     try {
       const formData = new FormData();
       formData.append("file", blob, "mode-choice.webm");
-      const response = await fetch(TRANSCRIBE_ENDPOINT, { method: "POST", body: formData });
+      const response = await apiFetch("/transcribe", { method: "POST", body: formData, signal: controller.signal });
       const result = await response.json();
+      if (!activeRef.current || controller.signal.aborted) return;
       if (!response.ok) throw new Error(result.detail || "Voice selection failed.");
       const transcript = result.text?.toLowerCase() || "";
-      if (transcript.includes("speak")) onSelect("speak");
-      else if (transcript.includes("chat")) onSelect("chat");
+      if (transcript.includes("speak") || transcript.includes("बोल")) onSelect("speak");
+      else if (transcript.includes("chat") || transcript.includes("टाइप") || transcript.includes("लिख")) onSelect("chat");
       else setError("Please say Speak or Chat, then try again.");
     } catch (requestError) {
-      setError(requestError.message || "Unable to understand the mode choice.");
+      if (activeRef.current && !controller.signal.aborted) setError(requestError.message || "Unable to understand the mode choice.");
+    } finally {
+      if (transcriptionRef.current === controller) transcriptionRef.current = null;
     }
   }
 
@@ -107,7 +122,12 @@ function ModeSelection({ language, onSelect, onBack }) {
       return;
     }
     try {
+      stopAllAudio();
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!activeRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       const options = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? { mimeType: "audio/webm;codecs=opus" } : {};
       const recorder = new MediaRecorder(stream, options);
       chunksRef.current = [];
@@ -133,18 +153,18 @@ function ModeSelection({ language, onSelect, onBack }) {
       <section className="start-card language-card mode-selection-card" aria-label="Interview mode selection">
         <div className="brand-mark small" aria-hidden="true">M</div>
         <p className="start-eyebrow">MediKiosk</p>
-        <h1>How would you like to continue?</h1>
+        <h1>{isHindi ? "आप कैसे आगे बढ़ना चाहेंगे?" : "How would you like to continue?"}</h1>
         <p className="start-copy">{prompt}</p>
         <div className="language-buttons">
-          <button className="language-button" type="button" onClick={() => onSelect("speak")}>Speak</button>
-          <button className="language-button" type="button" onClick={() => onSelect("chat")}>Chat</button>
+          <button className="language-button" type="button" onClick={() => onSelect("speak")}>{isHindi ? "बोलकर" : "Speak"}</button>
+          <button className="language-button" type="button" onClick={() => onSelect("chat")}>{isHindi ? "टाइप करके" : "Chat"}</button>
         </div>
         <button className={`voice-choice-button ${isListening ? "listening" : ""}`} type="button" onClick={isListening ? stopListening : startListening}>
-          {isListening ? "Stop listening" : "🎙 Choose by voice"}
+          {isListening ? (isHindi ? "सुनना बंद करें" : "Stop listening") : (isHindi ? "🎙 आवाज़ से चुनें" : "🎙 Choose by voice")}
         </button>
-        {isListening && <p className="recording-status language-recording"><span className="recording-dot" /> Say “Speak” or “Chat”</p>}
+        {isListening && <p className="recording-status language-recording"><span className="recording-dot" /> {isHindi ? "“बोलकर” या “टाइप” कहें" : "Say “Speak” or “Chat”"}</p>}
         {error && <p className="language-error" role="alert">{error}</p>}
-        <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
+        <button className="secondary-start-button" type="button" onClick={onBack}>{isHindi ? "वापस" : "Back"}</button>
       </section>
     </main>
   );
