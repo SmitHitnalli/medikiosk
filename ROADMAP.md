@@ -50,5 +50,6 @@
 - [ ] Backup demo video
 
 ## Known gaps
+- Engineering audit completed on 2026-09-05: 40 findings documented in `docs/BUG_AUDIT_2026-09-05.md`; frontend build and existing 24-check live smoke suite pass, but additional probes and code review found issues outside that coverage. Fixes are awaiting the owner's approval; no audit finding is marked resolved yet.
 - (Resolved) Hindi audio now uses a real Piper voice (hi_IN-pratham-medium); browser speechSynthesis is a last-resort fallback only.
 - Conversation-engine field extraction is sometimes incomplete even when the patient did answer: in sample-patient testing, "worse when I climb stairs, better with rest" was captured under exacerbating_relieving but onset/timing/severity were still left "unknown" even though onset was stated ("since yesterday") a turn earlier; in the AYUSH script, prakriti was captured but koshtha/nidana were left empty despite the patient directly answering those questions. Not a regression from this session's work (the underlying nurse-persona prompt and field-merging logic are unchanged) - flagged here because the trust ledger's completeness meter will visibly show these as "not yet captured" on demo day even on a well-answered interview. Worth a prompt-tuning pass on _next_field_instruction / SYSTEM_PROMPT if there's time before 20 September, but not a blocker.
