@@ -3,6 +3,7 @@ import AccessibilityBar from "./AccessibilityBar";
 import ClearDataButton from "./ClearDataButton";
 import ConsentScreen from "./ConsentScreen";
 import DepartmentSelection from "./DepartmentSelection";
+import DeviceDiagnostics from "./DeviceDiagnostics";
 import DoctorDashboard from "./DoctorDashboard";
 import DocumentScanner from "./DocumentScanner";
 import LanguageSelection from "./LanguageSelection";
@@ -40,7 +41,7 @@ function readStoredSession() {
   }
 }
 
-function StartScreen({ onStart, confirmation }) {
+function StartScreen({ onStart, onDiagnostics, confirmation }) {
   return (
     <main className="start-shell">
       <section className="start-card" aria-label="MediKiosk welcome screen">
@@ -49,6 +50,7 @@ function StartScreen({ onStart, confirmation }) {
         <h1>Patient history, made simple.</h1>
         <p className="start-copy">A guided conversation to help your physician understand how you are feeling.</p>
         <button className="start-button" type="button" onClick={onStart}>Start</button>
+        <button className="secondary-start-button" type="button" onClick={onDiagnostics}>Device check</button>
         <p className="start-note">Tap Start when you are ready.</p>
         {confirmation && <p className="clear-confirmation" role="status">{confirmation}</p>}
       </section>
@@ -59,7 +61,7 @@ function StartScreen({ onStart, confirmation }) {
 function App() {
   const stored = useRef(readStoredSession()).current;
   const initialHash = window.location.hash.slice(1);
-  const [page, setPage] = useState(STAFF_PAGES.has(initialHash) ? initialHash : stored?.page || "idle");
+  const [page, setPage] = useState(STAFF_PAGES.has(initialHash) || initialHash === "diagnostics" ? initialHash : stored?.page || "idle");
   const [interviewData, setInterviewData] = useState(stored?.interviewData || null);
   const [interviewComplete, setInterviewComplete] = useState(Boolean(stored?.interviewComplete));
   const [language, setLanguage] = useState(stored?.language || null);
@@ -192,6 +194,7 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const requested = window.location.hash.slice(1) || "idle";
+      if (requested === "diagnostics") return setPage("diagnostics");
       if (STAFF_PAGES.has(requested)) return setPage(requested);
       if (requested === "consent" && !sessionToken) return setPage("consent");
       if (requested === "language" && sessionToken && !language) return setPage("language");
@@ -566,7 +569,8 @@ function App() {
       const record = staffRecord;
       pageContent = <DoctorDashboard patientData={record?.data || interviewData} documents={record?.documents || scannedDocuments} transcript={record?.transcript || messages} redFlagEvents={record?.data?.red_flag ? [{ reason: record.data.red_flag_reason || "Urgent symptoms detected", source: "recorded", timestamp: record.updated_at }] : redFlagEvents} department={record?.department || department} sessionId={record?.session_id || sessionId} mediId={record?.patient_medi_id || patientInfo?.medi_id} patientName={record?.patient_name || patientInfo?.name} language={record?.language || language} staffToken={staffToken} staffUser={staffUser} onSessionExpired={expireStaffSession} onLoadSession={loadStaffSession} onBack={() => navigate(sessionToken && patientInfo && department ? "chat" : "idle")} onClearData={!record && sessionToken ? () => void returnToStart(true) : null} onOpenNurseStation={() => navigate("nurse-station")} onLogout={() => void logoutStaff()} />;
     }
-  } else if (page === "idle") pageContent = <StartScreen confirmation={clearConfirmation} onStart={() => { setClearConfirmation(""); navigate("consent"); }} />;
+  } else if (page === "idle") pageContent = <StartScreen confirmation={clearConfirmation} onDiagnostics={() => navigate("diagnostics")} onStart={() => { setClearConfirmation(""); navigate("consent"); }} />;
+  else if (page === "diagnostics") pageContent = <DeviceDiagnostics onBack={() => navigate("idle")} />;
   else if (page === "consent") pageContent = <ConsentScreen onAgree={() => void startSecureSession()} onDecline={() => resetLocalSession()} onClearData={() => resetLocalSession()} actionError={error} isSubmitting={isStartingSession} />;
   else if (page === "language") pageContent = <LanguageSelection onSelect={(value) => { setLanguage(value); setMessages([{ role: "assistant", content: greeting(value) }]); navigate("mode"); }} onBack={() => void returnToStart(false)} />;
   else if (page === "mode") pageContent = <ModeSelection language={language} onSelect={(value) => void chooseInteractionMode(value)} onBack={() => navigate("language")} />;

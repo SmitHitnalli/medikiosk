@@ -67,6 +67,12 @@ STAFF_DISPLAY_NAME = os.environ.get("STAFF_DISPLAY_NAME", "MediKiosk Administrat
 STAFF_ROLE = os.environ.get("STAFF_ROLE", "admin").strip().lower() or "admin"
 STAFF_PIN = os.environ.get("STAFF_PIN", "1234")
 STAFF_SESSION_SECONDS = 30 * 60
+KIOSK_ID = os.environ.get("KIOSK_ID", "kiosk-local").strip() or "kiosk-local"
+APP_VERSION = os.environ.get("MEDIKIOSK_VERSION", "dev").strip() or "dev"
+ALERT_ESCALATION_SECONDS = max(30, int(os.environ.get("ALERT_ESCALATION_SECONDS", "120")))
+ALLOWED_ORIGINS = [item.strip() for item in os.environ.get(
+    "MEDIKIOSK_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",") if item.strip()]
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 MAX_CHAT_CHARS = 4000
 MAX_SPEAK_CHARS = 3000
@@ -607,6 +613,18 @@ def _init_database() -> None:
                 payload_metadata TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
             )"""
         )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS security_attempts (
+                scope TEXT NOT NULL, subject_key TEXT NOT NULL, occurred_at REAL NOT NULL
+            )"""
+        )
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_security_attempts ON security_attempts(scope, subject_key, occurred_at)")
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS kiosk_heartbeats (
+                kiosk_id TEXT PRIMARY KEY, app_version TEXT NOT NULL, status TEXT NOT NULL,
+                details TEXT NOT NULL, last_seen TEXT NOT NULL
+            )"""
+        )
         patient_columns = {row["name"] for row in connection.execute("PRAGMA table_info(patients)")}
         for column in ("abha_number", "abha_address", "abha_status", "abha_verified_at"):
             if column not in patient_columns:
@@ -614,11 +632,20 @@ def _init_database() -> None:
         session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(sessions)")}
         if "lookup_failures" not in session_columns:
             connection.execute("ALTER TABLE sessions ADD COLUMN lookup_failures INTEGER NOT NULL DEFAULT 0")
+        if "kiosk_id" not in session_columns:
+            connection.execute("ALTER TABLE sessions ADD COLUMN kiosk_id TEXT")
         staff_session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(staff_sessions)")}
         if "staff_user_id" not in staff_session_columns:
             connection.execute("ALTER TABLE staff_sessions ADD COLUMN staff_user_id TEXT")
         if "created_at" not in staff_session_columns:
             connection.execute("ALTER TABLE staff_sessions ADD COLUMN created_at TEXT")
+        alert_columns = {row["name"] for row in connection.execute("PRAGMA table_info(nurse_alerts)")}
+        for column, definition in (
+            ("severity", "TEXT NOT NULL DEFAULT 'urgent'"), ("kiosk_id", "TEXT"),
+            ("escalated", "INTEGER NOT NULL DEFAULT 0"), ("escalated_at", "TEXT"),
+        ):
+            if column not in alert_columns:
+                connection.execute(f"ALTER TABLE nurse_alerts ADD COLUMN {column} {definition}")
 
         now = datetime.now(timezone.utc).isoformat()
         configured_usernames = []
@@ -729,6 +756,11 @@ def _mask_abha_number(value: str | None) -> str:
     return f"**-****-****-{digits[-4:]}" if digits else ""
 
 
+def _safe_kiosk_id(value: str | None) -> str:
+    value = (value or KIOSK_ID).strip().lower()
+    return value if re.fullmatch(r"[a-z0-9._-]{2,64}", value) else KIOSK_ID
+
+
 def _patient_response(row: sqlite3.Row) -> dict[str, str | None]:
     response = {
         "medi_id": row["medi_id"],
@@ -752,7 +784,7 @@ _init_database()
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_origin_regex=r"^https?://(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}):5173$",
     allow_credentials=True,
     allow_methods=["*"],
@@ -760,8 +792,20 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "geolocation=(), payment=(), usb=()"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
 @app.get("/health")
-def health() -> dict:
+def health(x_kiosk_id: str | None = Header(default=None)) -> dict:
     # Reports the backend process itself (always "ok" if this handler runs) plus a
     # quick, short-timeout reachability probe of Ollama, since "the FastAPI process
     # is alive" and "the AI assistant actually works" are different failure modes a
@@ -778,11 +822,26 @@ def health() -> dict:
             )
     except Exception:
         ollama_ok = False
+    now = datetime.now(timezone.utc).isoformat()
+    reporting_kiosk_id = _safe_kiosk_id(x_kiosk_id)
+    deployment = {
+        "kiosk_id": reporting_kiosk_id,
+        "app_version": APP_VERSION,
+        "tls_configured": bool(os.environ.get("TLS_CERT_FILE") and os.environ.get("TLS_KEY_FILE")),
+        "database": "central" if os.environ.get("CENTRAL_DATABASE") == "1" else "local",
+    }
+    with _connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO kiosk_heartbeats (kiosk_id, app_version, status, details, last_seen) VALUES (?, ?, 'online', ?, ?)",
+            (reporting_kiosk_id, APP_VERSION, json.dumps({"ollama": ollama_ok}), now),
+        )
+        connection.commit()
     return {
         "status": "ok",
         "ollama": "ok" if ollama_ok else "unreachable",
         "speech": provider_status(),
         "abdm": abdm_client.config.public_status(),
+        "deployment": deployment,
     }
 
 
@@ -790,17 +849,21 @@ def health() -> dict:
 def login_staff(payload: StaffPinRequest, request: Request) -> dict:
     username = payload.username.strip().lower()
     remote_address = request.client.host if request.client else "local"
-    client_key = f"{remote_address}:{username}"
+    attempt_keys = (f"user:{username}", f"address:{remote_address}")
     now_epoch = time.time()
-    with _staff_pin_lock:
-        recent = [value for value in _staff_pin_attempts.get(client_key, []) if now_epoch - value < 300]
-        _staff_pin_attempts[client_key] = recent
-        if len(recent) >= 5:
-            _write_audit_event(
-                "staff.login", "blocked", actor_type="staff", actor_id=username,
-                details={"reason": "rate_limited", "remote_address": remote_address},
-            )
-            raise HTTPException(status_code=429, detail="Too many incorrect PIN attempts. Try again in five minutes.")
+    with _connect() as connection:
+        connection.execute("DELETE FROM security_attempts WHERE occurred_at < ?", (now_epoch - 300,))
+        recent_count = max(connection.execute(
+            "SELECT COUNT(*) FROM security_attempts WHERE scope = 'staff_login' AND subject_key = ? AND occurred_at >= ?",
+            (attempt_key, now_epoch - 300),
+        ).fetchone()[0] for attempt_key in attempt_keys)
+        connection.commit()
+    if recent_count >= 5:
+        _write_audit_event(
+            "staff.login", "blocked", actor_type="staff", actor_id=username,
+            details={"reason": "rate_limited", "remote_address": remote_address, "kiosk_id": KIOSK_ID},
+        )
+        raise HTTPException(status_code=429, detail="Too many incorrect PIN attempts. Try again in five minutes.")
     with _connect() as connection:
         staff_user = connection.execute(
             "SELECT * FROM staff_users WHERE username = ?",
@@ -813,15 +876,23 @@ def login_staff(payload: StaffPinRequest, request: Request) -> dict:
     else:
         _pin_hash(payload.pin.strip(), b"medikiosk-login")
     if not valid_pin:
-        with _staff_pin_lock:
-            _staff_pin_attempts.setdefault(client_key, []).append(now_epoch)
+        with _connect() as connection:
+            connection.executemany(
+                "INSERT INTO security_attempts (scope, subject_key, occurred_at) VALUES ('staff_login', ?, ?)",
+                [(attempt_key, now_epoch) for attempt_key in attempt_keys],
+            )
+            connection.commit()
         _write_audit_event(
             "staff.login", "failure", actor_type="staff", actor_id=username,
             details={"reason": "invalid_credentials", "remote_address": remote_address},
         )
         raise HTTPException(status_code=401, detail="Incorrect staff ID or PIN")
-    with _staff_pin_lock:
-        _staff_pin_attempts.pop(client_key, None)
+    with _connect() as connection:
+        connection.executemany(
+            "DELETE FROM security_attempts WHERE scope = 'staff_login' AND subject_key = ?",
+            [(attempt_key,) for attempt_key in attempt_keys],
+        )
+        connection.commit()
     token = secrets.token_urlsafe(32)
     expires_at = time.time() + STAFF_SESSION_SECONDS
     created_at = datetime.now(timezone.utc).isoformat()
@@ -889,6 +960,25 @@ def get_current_staff(staff: dict[str, str] = Depends(require_staff)) -> dict:
     return {"user": {key: staff[key] for key in ("user_id", "username", "display_name", "role")}}
 
 
+@app.get("/staff/fleet/status")
+def get_fleet_status(_: dict[str, str] = Depends(require_roles("admin"))) -> dict:
+    now = datetime.now(timezone.utc)
+    with _connect() as connection:
+        kiosks = [dict(row) for row in connection.execute("SELECT * FROM kiosk_heartbeats ORDER BY kiosk_id")]
+        active_sessions = connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        active_alerts = connection.execute("SELECT COUNT(*) FROM nurse_alerts WHERE acknowledged = 0").fetchone()[0]
+        pending_reviews = connection.execute("SELECT COUNT(*) FROM sessions WHERE status = 'draft' AND patient_medi_id IS NOT NULL").fetchone()[0]
+    for kiosk in kiosks:
+        kiosk["details"] = _json_load(kiosk["details"], {})
+        age = (now - datetime.fromisoformat(kiosk["last_seen"])).total_seconds()
+        kiosk["status"] = "offline" if age > 90 else "online"
+        kiosk["seconds_since_seen"] = max(0, round(age))
+    return {
+        "kiosks": kiosks,
+        "metrics": {"sessions": active_sessions, "active_alerts": active_alerts, "pending_reviews": pending_reviews},
+    }
+
+
 @app.post("/staff/logout")
 def logout_staff(staff: dict[str, str] = Depends(require_staff)) -> dict:
     with _connect() as connection:
@@ -920,7 +1010,7 @@ def _session_headers(
 
 
 @app.post("/sessions/start")
-def start_session(request: SessionStartRequest) -> dict:
+def start_session(request: SessionStartRequest, x_kiosk_id: str | None = Header(default=None)) -> dict:
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc).isoformat()
     language = request.language or ""
@@ -943,8 +1033,8 @@ def start_session(request: SessionStartRequest) -> dict:
                 """
                 INSERT INTO sessions (
                     session_id, session_token_hash, language, interaction_mode,
-                    consent_given_at, clinical_data, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    consent_given_at, clinical_data, updated_at, kiosk_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     request.session_id,
@@ -954,6 +1044,7 @@ def start_session(request: SessionStartRequest) -> dict:
                     now,
                     json.dumps(data),
                     now,
+                    _safe_kiosk_id(x_kiosk_id),
                 ),
             )
             connection.commit()
@@ -964,7 +1055,7 @@ def start_session(request: SessionStartRequest) -> dict:
         actor_type="patient_session",
         actor_id=request.session_id,
         session_id=request.session_id,
-        details={"scope": consent["scope"]},
+        details={"scope": consent["scope"], "kiosk_id": _safe_kiosk_id(x_kiosk_id)},
     )
     return {"session_id": request.session_id, "session_token": token}
 
@@ -1637,9 +1728,12 @@ def check_red_flags(message: str) -> bool:
         .replace("छाती में दर्द", "chest pain")
         .replace("सांस लेने में तकलीफ", "breathlessness")
         .replace("साँस लेने में तकलीफ", "breathlessness")
+        .replace("सांस लेने में बहुत दिक्कत", "cannot breathe")
+        .replace("साँस लेने में बहुत दिक्कत", "cannot breathe")
         .replace("सांस नहीं", "cannot breathe")
         .replace("एक तरफ कमजोरी", "one side weakness")
         .replace("बहुत खून", "heavy bleeding")
+        .replace("बहुत ज्यादा खून", "heavy bleeding")
     )
     clauses = _split_clauses(text)
 
@@ -1648,6 +1742,12 @@ def check_red_flags(message: str) -> bool:
 
     has_chest_pain_or_chest = present("chest pain") or present("chest")
     has_breathing_term = present("breath") or present("breathless") or present("breathing")
+    if present("cannot breathe") or present("gasping") or present("choking"):
+        return True
+    if present("unresponsive") or present("unconscious") or "not responding" in text:
+        return True
+    if (present("face") and (present("droop") or present("uneven"))) and present("arm") and (present("weak") or present("numb")):
+        return True
     if has_chest_pain_or_chest and has_breathing_term:
         return True
 
@@ -2483,6 +2583,7 @@ def _record_nurse_station_alert(
     alert_id = f"{session_id}:{kind}"
     with _connect() as connection:
         existing = connection.execute("SELECT * FROM nurse_alerts WHERE id = ?", (alert_id,)).fetchone()
+        session_location = connection.execute("SELECT kiosk_id FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
         still_active = bool(existing and not existing["acknowledged"])
         triggered_at = existing["triggered_at"] if still_active else datetime.now(timezone.utc).isoformat()
         existing_source = existing["source"] if existing else None
@@ -2492,10 +2593,13 @@ def _record_nurse_station_alert(
         connection.execute(
             """
             INSERT OR REPLACE INTO nurse_alerts
-            (id, session_id, kind, patient_name, department, reason, source, triggered_at, acknowledged, acknowledged_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
+            (id, session_id, kind, patient_name, department, reason, source, triggered_at,
+             acknowledged, acknowledged_at, severity, kiosk_id, escalated, escalated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, 0, NULL)
             """,
-            (alert_id, session_id, kind, patient_name, department, reason, combined_source, triggered_at),
+            (alert_id, session_id, kind, patient_name, department, reason, combined_source, triggered_at,
+             "emergency" if kind == "red_flag" else "urgent",
+             (session_location["kiosk_id"] if session_location and session_location["kiosk_id"] else KIOSK_ID)),
         )
         connection.commit()
     _write_audit_event(
@@ -2509,10 +2613,27 @@ def _record_nurse_station_alert(
 
 @app.get("/nurse-station/alerts")
 def get_nurse_station_alerts(_: dict[str, str] = Depends(require_roles("nurse", "doctor", "admin"))) -> dict:
+    now = datetime.now(timezone.utc)
+    escalated_ids = []
     with _connect() as connection:
+        rows = connection.execute("SELECT * FROM nurse_alerts WHERE acknowledged = 0").fetchall()
+        for row in rows:
+            triggered = datetime.fromisoformat(row["triggered_at"])
+            if not row["escalated"] and (now - triggered).total_seconds() >= ALERT_ESCALATION_SECONDS:
+                connection.execute(
+                    "UPDATE nurse_alerts SET escalated = 1, escalated_at = ? WHERE id = ? AND acknowledged = 0",
+                    (now.isoformat(), row["id"]),
+                )
+                escalated_ids.append(row["id"])
+        connection.commit()
         active = [dict(row) for row in connection.execute("SELECT * FROM nurse_alerts WHERE acknowledged = 0")]
+    for alert_id in escalated_ids:
+        _write_audit_event(
+            "clinical.alert.escalated", actor_type="system", actor_id=KIOSK_ID,
+            details={"alert_id": alert_id, "threshold_seconds": ALERT_ESCALATION_SECONDS, "kiosk_id": KIOSK_ID},
+        )
     active.sort(key=lambda alert: alert["triggered_at"])
-    return {"alerts": active}
+    return {"alerts": active, "escalation_threshold_seconds": ALERT_ESCALATION_SECONDS}
 
 
 @app.post("/nurse-station/alerts/{alert_id}/acknowledge")
@@ -3067,6 +3188,7 @@ def _staff_session_payload(row: sqlite3.Row, include_record: bool = True) -> dic
         "interview_complete": bool(row["interview_complete"]),
         "status": row["status"],
         "updated_at": row["updated_at"],
+        "kiosk_id": row["kiosk_id"] if "kiosk_id" in row.keys() else KIOSK_ID,
         "chief_complaint": data.get("chief_complaint", ""),
         "red_flag": data.get("red_flag", False),
     }

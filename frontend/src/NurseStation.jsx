@@ -110,7 +110,7 @@ function NurseStation({ onBack, staffToken, staffUser, onSessionExpired, onLogou
         <div className="nurse-station-list">
           {alerts.map((alert) => (
             <section
-              className={`dashboard-card nurse-alert-card ${alert.kind === "help_request" ? "nurse-alert-help" : ""}`}
+              className={`dashboard-card nurse-alert-card ${alert.kind === "help_request" ? "nurse-alert-help" : ""} ${alert.escalated ? "nurse-alert-escalated" : ""}`}
               key={alert.id}
             >
               <div className="nurse-alert-heading">
@@ -118,12 +118,14 @@ function NurseStation({ onBack, staffToken, staffUser, onSessionExpired, onLogou
                 <div>
                   <p className="section-kicker">
                     {alert.kind === "help_request" ? "🆘 Help requested" : "🚩 Red flag"} · {alert.department || "General"}
+                    {alert.escalated ? " · ESCALATED" : ""}
                   </p>
                   <h2>{alert.patient_name || "Unknown patient"}</h2>
                 </div>
                 <span className="nurse-alert-time">{formatTimeAgo(alert.triggered_at)}</span>
               </div>
               <p className="nurse-alert-reason">{alert.reason}</p>
+              <p className="trust-metric-note">Kiosk {alert.kiosk_id || "unknown"} · {alert.severity || "urgent"} priority</p>
               <button
                 className="nurse-alert-ack-button"
                 type="button"

@@ -39,6 +39,9 @@ class MediKioskRegressionTests(unittest.TestCase):
 
     def setUp(self):
         main._staff_pin_attempts.clear()
+        with main._connect() as connection:
+            connection.execute("DELETE FROM security_attempts")
+            connection.commit()
 
     def start_session(self, language="en", mode="chat"):
         session_id = f"audit-{uuid.uuid4().hex}"
@@ -475,6 +478,27 @@ class MediKioskRegressionTests(unittest.TestCase):
             self.client.post("/abdm/callbacks/consent", json={"consentId": "bad"}).status_code,
             503,
         )
+
+    def test_fleet_health_and_unacknowledged_alert_escalation(self):
+        health = self.client.get("/health")
+        self.assertEqual(health.status_code, 200, health.text)
+        self.assertEqual(health.json()["deployment"]["kiosk_id"], main.KIOSK_ID)
+        admin = self.staff_headers("admin1", "9876")
+        fleet = self.client.get("/staff/fleet/status", headers=admin)
+        self.assertEqual(fleet.status_code, 200, fleet.text)
+        self.assertTrue(any(item["kiosk_id"] == main.KIOSK_ID for item in fleet.json()["kiosks"]))
+
+        session_id, _, _, _ = self.active_session()
+        main._record_nurse_station_alert(session_id, "Escalation Patient", "general", "Test urgent alert")
+        old_time = "2020-01-01T00:00:00+00:00"
+        with main._connect() as connection:
+            connection.execute("UPDATE nurse_alerts SET triggered_at = ? WHERE id = ?", (old_time, f"{session_id}:red_flag"))
+            connection.commit()
+        nurse = self.staff_headers("nurse1", "1357")
+        alerts = self.client.get("/nurse-station/alerts", headers=nurse).json()["alerts"]
+        escalated = next(item for item in alerts if item["id"] == f"{session_id}:red_flag")
+        self.assertEqual(escalated["escalated"], 1)
+        self.assertEqual(escalated["kiosk_id"], main.KIOSK_ID)
 
     def test_session_clear_removes_visit_but_retains_registry(self):
         session_id, token, headers, medi_id = self.active_session()

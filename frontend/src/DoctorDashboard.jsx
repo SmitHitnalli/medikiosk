@@ -671,8 +671,8 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
                 through the ABDM gateway. Local mode keeps the validated bundle on this device for integration testing.
               </p>
               <div className="abdm-push-actions">
-                <button className="play-summary-button" type="button" onClick={handlePush} disabled={pushState === "pushing"}>
-                  {pushState === "pushing" ? "Pushing..." : pushRecord ? "Push again" : "Push to ABDM/HIS"}
+                <button className="play-summary-button" type="button" onClick={handlePush} disabled={pushState === "pushing" || !signoff}>
+                  {!signoff ? "Sign off before export" : pushState === "pushing" ? "Pushing..." : pushRecord ? "Push again" : "Push to ABDM/HIS"}
                 </button>
                 {pushRecord && (
                   <button className="secondary-start-button" type="button" onClick={() => setShowBundle((current) => !current)}>

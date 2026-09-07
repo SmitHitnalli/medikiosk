@@ -1,0 +1,10 @@
+[
+  {"id":"en-chest-emergency","text":"Severe chest pain and I cannot breathe","expected_red_flag":true},
+  {"id":"en-stroke-emergency","text":"My face is drooping and one arm is suddenly weak","expected_red_flag":true},
+  {"id":"en-consciousness-emergency","text":"The patient fainted and is not responding","expected_red_flag":true},
+  {"id":"hi-breathing-emergency","text":"मुझे सांस लेने में बहुत दिक्कत हो रही है","expected_red_flag":true},
+  {"id":"hi-bleeding-emergency","text":"बहुत ज्यादा खून बह रहा है","expected_red_flag":true},
+  {"id":"en-routine-headache","text":"I have had a mild headache since yesterday","expected_red_flag":false},
+  {"id":"en-negated-chest","text":"I have acidity but no chest pain and no breathing difficulty","expected_red_flag":false},
+  {"id":"hi-routine-digestion","text":"खाना खाने के बाद हल्की गैस होती है","expected_red_flag":false}
+]

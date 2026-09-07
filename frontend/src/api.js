@@ -1,5 +1,6 @@
 const configuredBase = import.meta.env.VITE_API_URL?.replace(/\/$/, "");
 export const API_BASE = configuredBase || `${window.location.protocol}//${window.location.hostname}:8080`;
+export const KIOSK_ID = import.meta.env.VITE_KIOSK_ID || "kiosk-local";
 
 export async function apiFetch(path, options = {}, timeoutMs = 65000) {
   const controller = new AbortController();
@@ -11,7 +12,11 @@ export async function apiFetch(path, options = {}, timeoutMs = 65000) {
     else externalSignal.addEventListener("abort", abortFromExternal, { once: true });
   }
   try {
-    return await fetch(`${API_BASE}${path}`, { ...options, signal: controller.signal });
+    return await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: { ...(options.headers || {}), "X-Kiosk-ID": KIOSK_ID },
+      signal: controller.signal,
+    });
   } finally {
     window.clearTimeout(timeoutId);
     externalSignal?.removeEventListener("abort", abortFromExternal);

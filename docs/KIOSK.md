@@ -1,5 +1,7 @@
 # Kiosk-mode deployment
 
+For central multi-kiosk rollout, TLS, alert drills, device checks, and clinical validation, also follow `docs/DEPLOYMENT_AND_COMMISSIONING.md`.
+
 How to run MediKiosk the way an actual ward deployment (or the live SIH demo) would - full-screen, no browser chrome, no way to navigate away.
 
 ## Quick start
