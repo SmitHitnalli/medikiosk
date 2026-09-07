@@ -8,6 +8,7 @@ after every code change.
 import json
 import os
 import struct
+from datetime import datetime, timedelta, timezone
 import tempfile
 import unittest
 import uuid
@@ -731,6 +732,39 @@ class MediKioskRegressionTests(unittest.TestCase):
         alerts = self.client.get("/nurse-station/alerts", headers=nurse).json()["alerts"]
         matching = [alert for alert in alerts if alert["session_id"] == session_id2 and alert["kind"] == "read_back_dispute"]
         self.assertEqual(len(matching), 1)
+
+    def test_expired_patient_registry_entries_are_purged_but_recent_ones_kept(self):
+        _, _, _, old_medi_id = self.active_session()
+        _, _, _, recent_medi_id = self.active_session()
+        with main._connect() as connection:
+            connection.execute(
+                "UPDATE patients SET last_seen_at = ? WHERE medi_id = ?",
+                ((datetime.now(timezone.utc) - timedelta(days=400)).isoformat(), old_medi_id),
+            )
+            connection.commit()
+        purged = main.purge_expired_patients(retention_days=365)
+        self.assertEqual(purged, [old_medi_id])
+        with main._connect() as connection:
+            self.assertIsNone(connection.execute("SELECT 1 FROM patients WHERE medi_id = ?", (old_medi_id,)).fetchone())
+            self.assertIsNotNone(connection.execute("SELECT 1 FROM patients WHERE medi_id = ?", (recent_medi_id,)).fetchone())
+
+    def test_patient_can_erase_their_own_registry_entry(self):
+        session_id, _, headers, medi_id = self.active_session()
+        # Cannot erase a Medi ID not linked to this session.
+        self.assertEqual(self.client.delete("/patients/MK-OTHERY/registry", headers=headers).status_code, 403)
+        response = self.client.delete(f"/patients/{medi_id}/registry", headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        with main._connect() as connection:
+            self.assertIsNone(connection.execute("SELECT 1 FROM patients WHERE medi_id = ?", (medi_id,)).fetchone())
+
+    def test_staff_can_erase_a_patient_registry_entry_on_request(self):
+        _, _, _, medi_id = self.active_session()
+        staff = self.staff_headers("nurse1", "1357")
+        response = self.client.delete(f"/staff/patients/{medi_id}/registry", headers=staff)
+        self.assertEqual(response.status_code, 200, response.text)
+        with main._connect() as connection:
+            self.assertIsNone(connection.execute("SELECT 1 FROM patients WHERE medi_id = ?", (medi_id,)).fetchone())
+        self.assertEqual(self.client.delete(f"/staff/patients/{medi_id}/registry", headers=staff).status_code, 404)
 
 
 if __name__ == "__main__":

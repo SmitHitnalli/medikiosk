@@ -4,9 +4,10 @@ import { useEffect, useRef, useState } from "react";
 // touchable space, so the destructive "clear everything" action needs one
 // extra deliberate step. Self-contained (no parent screen needs to change)
 // so it drops into every page that already renders <ClearDataButton />.
-function ClearDataButton({ onClearData, language = "en" }) {
+function ClearDataButton({ onClearData, onEraseRegistry, language = "en" }) {
   const isHindi = language === "hi";
   const [isConfirming, setIsConfirming] = useState(false);
+  const [eraseRegistry, setEraseRegistry] = useState(false);
   const triggerRef = useRef(null);
   const dialogRef = useRef(null);
 
@@ -43,6 +44,8 @@ function ClearDataButton({ onClearData, language = "en" }) {
 
   function confirmClear() {
     setIsConfirming(false);
+    if (eraseRegistry) onEraseRegistry?.();
+    setEraseRegistry(false);
     onClearData();
   }
 
@@ -63,6 +66,14 @@ function ClearDataButton({ onClearData, language = "en" }) {
           >
             <p className="clear-confirm-heading">{isHindi ? "यह मुलाकात मिटाकर फिर से शुरू करें?" : "Clear this visit and start over?"}</p>
             <p className="clear-confirm-copy">{isHindi ? "इस मुलाकात का साक्षात्कार, दस्तावेज़ और अलर्ट मिट जाएँगे। आपकी दोबारा उपयोग की जा सकने वाली मेडी आईडी बनी रहेगी।" : "This visit's interview, documents, and alerts will be erased. Your reusable Medi ID registration will remain."}</p>
+            {onEraseRegistry && (
+              <label className="clear-confirm-erase-option">
+                <input type="checkbox" checked={eraseRegistry} onChange={(event) => setEraseRegistry(event.target.checked)} />
+                {isHindi
+                  ? "मेरी सहेजी गई जानकारी (नाम, फ़ोन, प्रकृति) भी हमेशा के लिए मिटाएं"
+                  : "Also permanently delete my saved details (name, phone, Prakriti)"}
+              </label>
+            )}
             <div className="clear-confirm-actions">
               <button className="clear-confirm-no" type="button" onClick={() => setIsConfirming(false)} autoFocus>
                 {isHindi ? "नहीं, जारी रखें" : "No, keep going"}

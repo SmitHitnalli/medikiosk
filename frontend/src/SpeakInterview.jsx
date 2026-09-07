@@ -26,6 +26,7 @@ function SpeakInterview({
   onDocuments,
   onDashboard,
   onClearData,
+  onEraseRegistry,
 }) {
   const pendingReadBack = interviewComplete && readBackSummary && !readBackConfirmed;
   const isHindi = language === "hi";
@@ -48,7 +49,7 @@ function SpeakInterview({
         <div><p className="eyebrow">MediKiosk</p><p className="speak-mode-caption">{isHindi ? "आवाज़ द्वारा स्वास्थ्य इतिहास" : "Voice health history"}</p></div>
         <div className="speak-header-actions">
           <button type="button" onClick={onDocuments}>{isHindi ? `दस्तावेज़ ${documentCount ? `(${documentCount})` : ""}` : `Documents ${documentCount ? `(${documentCount})` : ""}`}</button>
-          <ClearDataButton language={language} onClearData={onClearData} />
+          <ClearDataButton language={language} onClearData={onClearData} onEraseRegistry={onEraseRegistry} />
         </div>
       </header>
 

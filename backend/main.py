@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse
 from starlette.responses import Response
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -53,6 +53,12 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "llama3.1:8b"
 DATABASE_PATH = Path(os.environ.get("MEDIKIOSK_DATABASE_PATH") or Path(__file__).resolve().parent / "medikiosk.db")
 MEDI_ID_ALPHABET = string.ascii_uppercase + string.digits
+# How long a patient registry entry (name, phone, confirmed Prakriti) may sit
+# unused before purge_expired_patients.py removes it. Configurable per
+# deployment rather than hardcoded, per the compliance requirement - the
+# per-visit "clear data" action deliberately keeps this entry for return
+# visits, so an owning retention window is what eventually removes it.
+PATIENT_RETENTION_DAYS = int(os.environ.get("PATIENT_RETENTION_DAYS", "365"))
 PIPER_VOICE_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx"
 PIPER_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-medium.onnx.json"
 # Real Hindi Piper voice, not yet downloaded into this repo (network-restricted dev
@@ -640,6 +646,9 @@ def _init_database() -> None:
         for column in ("abha_number", "abha_address", "abha_status", "abha_verified_at"):
             if column not in patient_columns:
                 connection.execute(f"ALTER TABLE patients ADD COLUMN {column} TEXT")
+        if "last_seen_at" not in patient_columns:
+            connection.execute("ALTER TABLE patients ADD COLUMN last_seen_at TEXT")
+            connection.execute("UPDATE patients SET last_seen_at = created_at WHERE last_seen_at IS NULL")
         session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(sessions)")}
         if "lookup_failures" not in session_columns:
             connection.execute("ALTER TABLE sessions ADD COLUMN lookup_failures INTEGER NOT NULL DEFAULT 0")
@@ -1223,12 +1232,13 @@ def register_patient(request: PatientRegistration, session: sqlite3.Row = Depend
         for _ in range(10):
             medi_id = "MK-" + "".join(secrets.choice(MEDI_ID_ALPHABET) for _ in range(6))
             try:
+                registered_at = datetime.now(timezone.utc).isoformat()
                 connection.execute(
                     """INSERT INTO patients
-                       (medi_id, name, phone_number, abha_number, abha_address, abha_status, abha_verified_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                       (medi_id, name, phone_number, abha_number, abha_address, abha_status, abha_verified_at, last_seen_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (medi_id, name, phone_number, abha_number or None, abha_address or None,
-                     "patient_provided" if abha_number else "not_linked", None),
+                     "patient_provided" if abha_number else "not_linked", None, registered_at),
                 )
                 connection.commit()
                 data = ClinicalData.model_validate(_json_load(session["clinical_data"], {})).model_dump()
@@ -1296,9 +1306,11 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
             "DELETE FROM security_attempts WHERE scope = 'medi_id_lookup' AND subject_key = ?",
             (medi_id,),
         )
+        now_iso = datetime.now(timezone.utc).isoformat()
+        connection.execute("UPDATE patients SET last_seen_at = ? WHERE medi_id = ?", (now_iso, row["medi_id"]))
         connection.execute(
             "UPDATE sessions SET patient_medi_id = ?, patient_name = ?, clinical_data = ?, updated_at = ? WHERE session_id = ?",
-            (row["medi_id"], row["name"], json.dumps(data), datetime.now(timezone.utc).isoformat(), session["session_id"]),
+            (row["medi_id"], row["name"], json.dumps(data), now_iso, session["session_id"]),
         )
         connection.commit()
     _write_audit_event(
@@ -1309,6 +1321,69 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
         patient_medi_id=row["medi_id"],
     )
     return _patient_response(row)
+
+
+def purge_expired_patients(retention_days: int = PATIENT_RETENTION_DAYS) -> list[str]:
+    """Delete patient registry entries (name, phone, confirmed Prakriti) not
+    seen (registered or looked up) within retention_days. Returns the purged
+    Medi IDs. Does not touch sessions/audit_events/abdm_pushes - those are the
+    historical clinical record of past visits, not the "return visit
+    convenience" registry this purge targets. Called by
+    purge_expired_patients.py, meant to be run on a schedule (cron / Windows
+    Task Scheduler), not from within the request-serving process."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    with _connect() as connection:
+        expired = [
+            row["medi_id"]
+            for row in connection.execute("SELECT medi_id FROM patients WHERE last_seen_at < ?", (cutoff,))
+        ]
+        if expired:
+            connection.executemany("DELETE FROM patients WHERE medi_id = ?", [(medi_id,) for medi_id in expired])
+            connection.commit()
+    for medi_id in expired:
+        _write_audit_event(
+            "patient.registry.purged", actor_type="system", actor_id="retention_job",
+            patient_medi_id=medi_id, details={"retention_days": retention_days},
+        )
+    return expired
+
+
+@app.delete("/patients/{medi_id}/registry")
+def erase_patient_registry(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) -> dict:
+    # Patient-initiated erasure, distinct from the per-visit "clear data"
+    # action (which deliberately retains this entry). Identity confirmation is
+    # the same bar as any other patient-session write: the Medi ID must be the
+    # one already linked to this authenticated session.
+    if session["patient_medi_id"] != medi_id:
+        raise HTTPException(status_code=403, detail="This patient is not linked to the active session")
+    with _connect() as connection:
+        deleted = connection.execute("DELETE FROM patients WHERE medi_id = ?", (medi_id,)).rowcount
+        connection.commit()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    _write_audit_event(
+        "patient.registry.erased", actor_type="patient_session", actor_id=session["session_id"],
+        session_id=session["session_id"], patient_medi_id=medi_id,
+    )
+    return {"deleted": True}
+
+
+@app.delete("/staff/patients/{medi_id}/registry")
+def staff_erase_patient_registry(
+    medi_id: str, staff: dict[str, str] = Depends(require_roles("nurse", "doctor", "admin"))
+) -> dict:
+    # Staff-initiated erasure on a patient's request, e.g. a phone/in-person
+    # ask when the patient has no active kiosk session.
+    with _connect() as connection:
+        deleted = connection.execute("DELETE FROM patients WHERE medi_id = ?", (medi_id,)).rowcount
+        connection.commit()
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    _write_audit_event(
+        "patient.registry.erased", actor_type="staff", actor_id=staff["user_id"], actor_role=staff["role"],
+        patient_medi_id=medi_id, details={"requested_by": "patient_request"},
+    )
+    return {"deleted": True}
 
 
 @app.patch("/patients/{medi_id}/prakriti")
@@ -3727,8 +3802,8 @@ def confirm_ayush_assessment(
             (json.dumps(data), now, session_id),
         )
         connection.execute(
-            "UPDATE patients SET prakriti = ? WHERE medi_id = ?",
-            (ayush["prakriti"], row["patient_medi_id"]),
+            "UPDATE patients SET prakriti = ?, last_seen_at = ? WHERE medi_id = ?",
+            (ayush["prakriti"], datetime.now(timezone.utc).isoformat(), row["patient_medi_id"]),
         )
         connection.commit()
     _write_audit_event(

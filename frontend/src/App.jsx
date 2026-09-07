@@ -446,6 +446,16 @@ function App() {
     }
   }
 
+  async function eraseMyRegistry() {
+    const medId = patientInfo?.medi_id;
+    if (!medId) return;
+    try {
+      await apiFetch(`/patients/${medId}/registry`, { method: "DELETE", headers: patientHeaders(sessionId, sessionToken) });
+    } catch {
+      // Best-effort - the visit itself is cleared regardless of whether this succeeds.
+    }
+  }
+
   async function confirmReadBack() {
     setReadBackConfirmed(true);
     try {
@@ -620,13 +630,13 @@ function App() {
   else if (page === "patient") pageContent = <PatientIdentification language={language} interactionMode={interactionMode} sessionId={sessionId} sessionToken={sessionToken} onComplete={(patient) => { setPatientInfo(patient); navigate("department"); }} onBack={() => void returnToStart(false)} onClearData={() => void returnToStart(true)} />;
   else if (page === "department") pageContent = <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(value) => void chooseDepartment(value)} onBack={() => navigate("patient")} onClearData={() => void returnToStart(true)} />;
   else if (page === "documents") pageContent = <DocumentScanner language={language} interactionMode={interactionMode} initialDocuments={scannedDocuments} onDocumentsChange={(docs) => void persistDocuments(docs)} onDone={(docs) => { void persistDocuments(docs); navigate("chat"); }} onBack={() => navigate("chat")} onClearData={() => void returnToStart(true)} />;
-  else if (interactionMode === "speak") pageContent = <SpeakInterview language={language} messages={messages} redFlagReason={redFlagReason} redFlagCategory={redFlagCategory} isSending={isSending} isSpeaking={isSpeaking} isRecording={isRecording} interviewComplete={interviewComplete} readBackSummary={readBackSummary} readBackConfirmed={readBackConfirmed} onConfirmReadBack={() => void confirmReadBack()} onDisputeReadBack={() => void disputeReadBack()} idleWarning={idleWarning} error={error} documentCount={scannedDocuments.length} message={message} onMessageChange={setMessage} onSend={(value) => void sendTextMessage(value)} onToggleRecording={isRecording ? stopRecording : startRecording} onSwitchToChat={() => void chooseInteractionMode("chat", "chat")} onDocuments={() => navigate("documents")} onDashboard={() => navigate("dashboard")} onClearData={() => void returnToStart(true)} />;
+  else if (interactionMode === "speak") pageContent = <SpeakInterview language={language} messages={messages} redFlagReason={redFlagReason} redFlagCategory={redFlagCategory} isSending={isSending} isSpeaking={isSpeaking} isRecording={isRecording} interviewComplete={interviewComplete} readBackSummary={readBackSummary} readBackConfirmed={readBackConfirmed} onConfirmReadBack={() => void confirmReadBack()} onDisputeReadBack={() => void disputeReadBack()} idleWarning={idleWarning} error={error} documentCount={scannedDocuments.length} message={message} onMessageChange={setMessage} onSend={(value) => void sendTextMessage(value)} onToggleRecording={isRecording ? stopRecording : startRecording} onSwitchToChat={() => void chooseInteractionMode("chat", "chat")} onDocuments={() => navigate("documents")} onDashboard={() => navigate("dashboard")} onClearData={() => void returnToStart(true)} onEraseRegistry={() => void eraseMyRegistry()} />;
   else pageContent = (
     <main className="app-shell">
       <section className="chat-card" aria-label="MediKiosk patient interview">
         <header className="app-header">
           <div><p className="eyebrow">MediKiosk</p><h1>{language === "hi" ? "रोगी साक्षात्कार" : "Patient interview"}</h1><p className="subtitle">{language === "hi" ? "डॉक्टर की समीक्षा के लिए संरचित स्वास्थ्य इतिहास।" : "A structured history for your physician to review."}</p></div>
-          <div className="header-actions"><ClearDataButton language={language} onClearData={() => void returnToStart(true)} /><a className="dashboard-link" href="#documents" onClick={(event) => { event.preventDefault(); navigate("documents"); }}>{scannedDocuments.length ? (language === "hi" ? `दस्तावेज़ (${scannedDocuments.length}) →` : `Documents (${scannedDocuments.length}) →`) : (language === "hi" ? "दस्तावेज़ स्कैन करें →" : "Scan documents →")}</a><a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>{language === "hi" ? "डॉक्टर सारांश →" : "Doctor dashboard →"}</a></div>
+          <div className="header-actions"><ClearDataButton language={language} onClearData={() => void returnToStart(true)} onEraseRegistry={() => void eraseMyRegistry()} /><a className="dashboard-link" href="#documents" onClick={(event) => { event.preventDefault(); navigate("documents"); }}>{scannedDocuments.length ? (language === "hi" ? `दस्तावेज़ (${scannedDocuments.length}) →` : `Documents (${scannedDocuments.length}) →`) : (language === "hi" ? "दस्तावेज़ स्कैन करें →" : "Scan documents →")}</a><a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>{language === "hi" ? "डॉक्टर सारांश →" : "Doctor dashboard →"}</a></div>
         </header>
         {redFlagReason && (redFlagCategory === "mental_health_crisis" ? (
           <div className="calm-support-alert" role="status">

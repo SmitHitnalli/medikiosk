@@ -374,6 +374,8 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .clear-confirm-dialog { width: 100%; max-width: 380px; padding: 26px 24px; border-radius: 16px; background: #fffdf8; box-shadow: 0 20px 48px rgba(10, 26, 24, .28); text-align: center; }
 .clear-confirm-heading { margin: 0; color: #173b3c; font-family: "Space Grotesk", sans-serif; font-size: 19px; font-weight: 700; }
 .clear-confirm-copy { margin: 10px 0 0; color: #5c7570; font-size: 13.5px; line-height: 1.5; }
+.clear-confirm-erase-option { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0 0; color: #7e1d1d; font-size: 13px; line-height: 1.4; }
+.clear-confirm-erase-option input { margin-top: 2px; }
 .clear-confirm-actions { display: grid; gap: 10px; margin-top: 22px; }
 .clear-confirm-no { min-height: 48px; border: 0; border-radius: 11px; color: #fff; background: #0f766e; cursor: pointer; font-size: 14.5px; font-weight: 700; }
 .clear-confirm-no:hover { background: #0c5a54; }
