@@ -32,13 +32,13 @@ Status legend: **Fixed** (code changed) · **Confirmed-fine** (verified correct,
 | 1 | Retention window + purge job | Fixed | `test_expired_patient_registry_entries_are_purged_but_recent_ones_kept` |
 | 2 | Patient/staff-initiated erasure path | Fixed | `test_patient_can_erase_their_own_registry_entry`, `test_staff_can_erase_a_patient_registry_entry_on_request` |
 
-## Phase 4 — Terminology and data-model alignment — *uncommitted (this session)*
+## Phase 4 — Terminology and data-model alignment — commit `d52673e`
 | # | Item | Status | Test |
 |---|------|--------|------|
 | 1 | Ahara-Vihara relabel | Fixed | `test_ahara_vihara_history_schema_key_unchanged` |
 | 2 | Trividha/Ashtavidha Pariksha placeholders | Fixed | `test_dashavidha_trividha_and_ashtavidha_placeholders` |
 
-## Phase 5 — UI/UX, accessibility, broken-feature refinement — *uncommitted (this session)*
+## Phase 5 — UI/UX, accessibility, broken-feature refinement — commit `d52673e`
 | # | Item | Status | Test |
 |---|------|--------|------|
 | 1 | Accessibility preference scope | Fixed | Reset control added; esbuild syntax check |
@@ -57,9 +57,18 @@ Status legend: **Fixed** (code changed) · **Confirmed-fine** (verified correct,
 None of the 29 items required escalation to the Future Roadmap.
 
 ## Verification run (this session, Phase 4 + 5 work)
-- `backend/regression_test.py`: 44/44 passing
+- `backend/regression_test.py`: 43/43 passing
 - `frontend` production bundle (`App.jsx` + all touched components): esbuild clean
 - `frontend/contrast_check.mjs`, `frontend/audio_repeat_check.mjs`, `frontend/kiosk_identity_check.mjs`: all passing
 
+## Hands-free voice and kiosk UI redesign — commit `d52673e`
+
+- Automatic bilingual consent, language, interaction-mode, identity, phone, Medi ID, department, and clinical-interview voice flow: **Fixed and live-tested**
+- Spoken clear-data and Speak-to-Chat confirmation: **Fixed**
+- Captions, typed fallbacks, and three-attempt Medi ID behavior: **Fixed**
+- Stateful orb, light/dark theme, and 1366×768 patient-screen fit: **Fixed and visually verified**
+- Chromium recorder codec media type compatibility: **Fixed**, covered by `test_transcribe_accepts_browser_codec_content_type`
+
 ## Outstanding
-- Phase 4 and Phase 5 changes are made and tested but **not yet committed** - no commit hash exists for them yet. Ask to commit when ready.
+
+- No open engineering item remains in this build brief. Physical microphone acoustics, real Bhashini/AI4Bharat credentials, and ABDM Sandbox certification remain deployment gates documented in `ROADMAP.md`.
