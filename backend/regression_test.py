@@ -14,6 +14,11 @@ from unittest.mock import patch
 
 _temp_dir = tempfile.TemporaryDirectory(prefix="medikiosk-regression-")
 os.environ["MEDIKIOSK_DATABASE_PATH"] = os.path.join(_temp_dir.name, "test.db")
+os.environ["STAFF_ACCOUNTS_JSON"] = json.dumps([
+    {"username": "nurse1", "display_name": "Test Nurse", "role": "nurse", "pin": "1357"},
+    {"username": "doctor1", "display_name": "Test Doctor", "role": "doctor", "pin": "2468"},
+    {"username": "admin1", "display_name": "Test Admin", "role": "admin", "pin": "9876"},
+])
 
 from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -61,8 +66,8 @@ class MediKioskRegressionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return session_id, token, headers, medi_id
 
-    def staff_headers(self):
-        response = self.client.post("/staff/verify-pin", json={"pin": main.STAFF_PIN})
+    def staff_headers(self, username="doctor1", pin="2468"):
+        response = self.client.post("/staff/login", json={"username": username, "pin": pin})
         self.assertEqual(response.status_code, 200, response.text)
         return {"X-Staff-Token": response.json()["token"]}
 
@@ -72,10 +77,47 @@ class MediKioskRegressionTests(unittest.TestCase):
         self.assertEqual(self.client.get("/abdm/push/unknown").status_code, 401)
         self.assertEqual(self.client.get("/nurse-station/alerts", headers=self.staff_headers()).status_code, 200)
 
+        nurse = self.staff_headers("nurse1", "1357")
+        self.assertEqual(self.client.get("/nurse-station/alerts", headers=nurse).status_code, 200)
+        self.assertEqual(self.client.get("/staff/sessions", headers=nurse).status_code, 403)
+
     def test_staff_pin_is_rate_limited(self):
         for _ in range(5):
-            self.assertEqual(self.client.post("/staff/verify-pin", json={"pin": "0000"}).status_code, 401)
-        self.assertEqual(self.client.post("/staff/verify-pin", json={"pin": main.STAFF_PIN}).status_code, 429)
+            self.assertEqual(self.client.post("/staff/login", json={"username": "doctor1", "pin": "0000"}).status_code, 401)
+        self.assertEqual(self.client.post("/staff/login", json={"username": "doctor1", "pin": "2468"}).status_code, 429)
+
+    def test_consent_first_session_accepts_preferences_afterward(self):
+        session_id = f"consent-{uuid.uuid4().hex}"
+        response = self.client.post("/sessions/start", json={"session_id": session_id, "consent": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        token = response.json()["session_token"]
+        headers = {"X-Session-Token": token}
+        record = self.client.get(f"/sessions/{session_id}", headers=headers).json()
+        self.assertEqual(record["language"], "")
+        self.assertEqual(record["interaction_mode"], "")
+        response = self.client.patch(
+            f"/sessions/{session_id}/preferences",
+            headers=headers,
+            json={"language": "hi", "interaction_mode": "speak"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        record = self.client.get(f"/sessions/{session_id}", headers=headers).json()
+        self.assertEqual(record["language"], "hi")
+        self.assertEqual(record["interaction_mode"], "speak")
+
+    def test_audit_events_are_attributed_and_hash_chained(self):
+        session_id, _, _, _ = self.active_session()
+        doctor = self.staff_headers()
+        self.assertEqual(self.client.get(f"/staff/sessions/{session_id}", headers=doctor).status_code, 200)
+        self.assertEqual(self.client.get("/staff/audit", headers=doctor).status_code, 403)
+        admin = self.staff_headers("admin1", "9876")
+        response = self.client.get("/staff/audit?limit=50", headers=admin)
+        self.assertEqual(response.status_code, 200, response.text)
+        events = list(reversed(response.json()["events"]))
+        self.assertTrue(any(event["action"] == "patient.consent.accepted" for event in events))
+        self.assertTrue(any(event["action"] == "clinical.record.viewed" for event in events))
+        for previous, current in zip(events, events[1:]):
+            self.assertEqual(current["previous_hash"], previous["event_hash"])
 
     def test_patient_flow_requires_consent_identity_and_department(self):
         self.assertEqual(

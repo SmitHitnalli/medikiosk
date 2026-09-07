@@ -18,7 +18,7 @@ const SESSION_STORAGE_KEY = "medikiosk-active-session";
 const IDLE_WARNING_MS = 4 * 60 * 1000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const STAFF_PAGES = new Set(["dashboard", "nurse-station"]);
-const PATIENT_PAGES = new Set(["consent", "patient", "department", "chat", "documents"]);
+const PATIENT_PAGES = new Set(["consent", "language", "mode", "patient", "department", "chat", "documents"]);
 
 function createSessionId() {
   return window.crypto?.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -68,6 +68,7 @@ function App() {
   const [sessionId, setSessionId] = useState(stored?.sessionId || createSessionId);
   const [sessionToken, setSessionToken] = useState(stored?.sessionToken || null);
   const [staffToken, setStaffToken] = useState(null);
+  const [staffUser, setStaffUser] = useState(null);
   const [staffRecord, setStaffRecord] = useState(null);
   const [clearConfirmation, setClearConfirmation] = useState("");
   const [idleWarning, setIdleWarning] = useState(false);
@@ -133,6 +134,7 @@ function App() {
     setSessionId(createSessionId());
     setSessionToken(null);
     setStaffToken(null);
+    setStaffUser(null);
     setStaffRecord(null);
     setInterviewData(null);
     setInterviewComplete(false);
@@ -188,14 +190,14 @@ function App() {
     const handleHashChange = () => {
       const requested = window.location.hash.slice(1) || "idle";
       if (STAFF_PAGES.has(requested)) return setPage(requested);
-      if (requested === "language" && !sessionToken) return setPage("language");
-      if (requested === "mode" && language && !sessionToken) return setPage("mode");
-      if (requested === "consent" && language && interactionMode && !sessionToken) return setPage("consent");
-      if (requested === "patient" && sessionToken && !department) return setPage("patient");
+      if (requested === "consent" && !sessionToken) return setPage("consent");
+      if (requested === "language" && sessionToken && !language) return setPage("language");
+      if (requested === "mode" && sessionToken && language && !interactionMode) return setPage("mode");
+      if (requested === "patient" && sessionToken && language && interactionMode && !department) return setPage("patient");
       if (requested === "department" && sessionToken && patientInfo && !department) return setPage("department");
       if (["chat", "documents"].includes(requested) && sessionToken && patientInfo && department) return setPage(requested);
       if (requested === "idle" && !sessionToken) return setPage("idle");
-      const fallback = sessionToken && patientInfo && department ? "chat" : "idle";
+      const fallback = !sessionToken ? "idle" : !language ? "language" : !interactionMode ? "mode" : !patientInfo ? "patient" : !department ? "department" : "chat";
       setPage(fallback);
       window.location.hash = fallback === "idle" ? "" : fallback;
     };
@@ -225,8 +227,8 @@ function App() {
         }, 10000);
         if (!response.ok) throw new Error("Stored visit is no longer available");
         const record = await response.json();
-        setLanguage(record.language);
-        setInteractionMode(record.interaction_mode);
+        setLanguage(record.language || null);
+        setInteractionMode(record.interaction_mode || null);
         setPatientInfo(record.patient_medi_id ? {
           medi_id: record.patient_medi_id, name: record.patient_name, returning_patient: true,
           prakriti: record.data?.ayush_assessment?.prakriti || null,
@@ -236,9 +238,13 @@ function App() {
         setInterviewComplete(Boolean(record.interview_complete));
         setMessages(record.transcript?.length ? record.transcript : [{ role: "assistant", content: greeting(record.language) }]);
         setScannedDocuments(record.documents || []);
-        const restoredPage = record.department
-          ? (["chat", "documents"].includes(stored.page) ? stored.page : "chat")
-          : (record.patient_medi_id ? "department" : "patient");
+        const restoredPage = !record.language
+          ? "language"
+          : !record.interaction_mode
+            ? "mode"
+            : record.department
+              ? (["chat", "documents"].includes(stored.page) ? stored.page : "chat")
+              : (record.patient_medi_id ? "department" : "patient");
         setPage(restoredPage);
         window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${restoredPage}`);
       } catch (restoreError) {
@@ -287,25 +293,43 @@ function App() {
   }, [interactionMode, language, messages, page, sessionId, sessionToken]);
 
   async function startSecureSession() {
-    if (!language || !interactionMode || isStartingSession) return;
+    if (isStartingSession) return;
     setIsStartingSession(true);
     setError("");
     const nextId = createSessionId();
     try {
       const response = await apiFetch("/sessions/start", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: nextId, language, interaction_mode: interactionMode, consent: true }),
+        body: JSON.stringify({ session_id: nextId, consent: true }),
       }, 10000);
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || "Could not start the visit.");
       setSessionId(result.session_id);
       setSessionToken(result.session_token);
-      setMessages([{ role: "assistant", content: greeting(language) }]);
-      navigate("patient");
+      navigate("language");
     } catch (startError) {
       setError(startError.message || "Unable to start a secure visit.");
     } finally {
       setIsStartingSession(false);
+    }
+  }
+
+  async function chooseInteractionMode(value) {
+    if (!sessionToken || !language) return;
+    setError("");
+    try {
+      const response = await apiFetch(`/sessions/${encodeURIComponent(sessionId)}/preferences`, {
+        method: "PATCH",
+        headers: patientHeaders(sessionId, sessionToken, true),
+        body: JSON.stringify({ language, interaction_mode: value }),
+      }, 10000);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "Could not save your interaction preference.");
+      setInteractionMode(result.interaction_mode);
+      setMessages([{ role: "assistant", content: greeting(language) }]);
+      navigate("patient");
+    } catch (preferenceError) {
+      setError(preferenceError.message || "Unable to save your interaction preference.");
     }
   }
 
@@ -501,8 +525,26 @@ function App() {
 
   const expireStaffSession = useCallback(() => {
     setStaffToken(null);
+    setStaffUser(null);
     setStaffRecord(null);
   }, []);
+
+  function completeStaffLogin(result) {
+    setStaffToken(result.token);
+    setStaffUser(result.user);
+    if (result.user?.role === "nurse" && pageRef.current === "dashboard") navigate("nurse-station");
+  }
+
+  async function logoutStaff() {
+    const token = staffToken;
+    expireStaffSession();
+    if (!token) return;
+    try {
+      await apiFetch("/staff/logout", { method: "POST", headers: staffHeaders(token) }, 10000);
+    } catch {
+      // The local staff view is locked even if the server is temporarily unavailable.
+    }
+  }
 
   async function loadStaffSession(selectedId) {
     try {
@@ -518,16 +560,16 @@ function App() {
 
   let pageContent;
   if (STAFF_PAGES.has(page)) {
-    if (!staffToken) pageContent = <StaffPinGate onSuccess={setStaffToken} onBack={() => navigate(sessionToken && patientInfo && department ? "chat" : "idle")} />;
-    else if (page === "nurse-station") pageContent = <NurseStation staffToken={staffToken} onSessionExpired={expireStaffSession} onBack={() => navigate("dashboard")} onLogout={() => { setStaffToken(null); setStaffRecord(null); }} />;
+    if (!staffToken) pageContent = <StaffPinGate onSuccess={completeStaffLogin} onBack={() => navigate(sessionToken && patientInfo && department ? "chat" : "idle")} />;
+    else if (page === "nurse-station" || staffUser?.role === "nurse") pageContent = <NurseStation staffToken={staffToken} staffUser={staffUser} onSessionExpired={expireStaffSession} onBack={staffUser?.role === "nurse" ? null : () => navigate("dashboard")} onLogout={() => void logoutStaff()} />;
     else {
       const record = staffRecord;
-      pageContent = <DoctorDashboard patientData={record?.data || interviewData} documents={record?.documents || scannedDocuments} transcript={record?.transcript || messages} redFlagEvents={record?.data?.red_flag ? [{ reason: record.data.red_flag_reason || "Urgent symptoms detected", source: "recorded", timestamp: record.updated_at }] : redFlagEvents} department={record?.department || department} sessionId={record?.session_id || sessionId} mediId={record?.patient_medi_id || patientInfo?.medi_id} patientName={record?.patient_name || patientInfo?.name} language={record?.language || language} staffToken={staffToken} onSessionExpired={expireStaffSession} onLoadSession={loadStaffSession} onBack={() => navigate(sessionToken && patientInfo && department ? "chat" : "idle")} onClearData={!record && sessionToken ? () => void returnToStart(true) : null} onOpenNurseStation={() => navigate("nurse-station")} onLogout={() => { setStaffToken(null); setStaffRecord(null); }} />;
+      pageContent = <DoctorDashboard patientData={record?.data || interviewData} documents={record?.documents || scannedDocuments} transcript={record?.transcript || messages} redFlagEvents={record?.data?.red_flag ? [{ reason: record.data.red_flag_reason || "Urgent symptoms detected", source: "recorded", timestamp: record.updated_at }] : redFlagEvents} department={record?.department || department} sessionId={record?.session_id || sessionId} mediId={record?.patient_medi_id || patientInfo?.medi_id} patientName={record?.patient_name || patientInfo?.name} language={record?.language || language} staffToken={staffToken} staffUser={staffUser} onSessionExpired={expireStaffSession} onLoadSession={loadStaffSession} onBack={() => navigate(sessionToken && patientInfo && department ? "chat" : "idle")} onClearData={!record && sessionToken ? () => void returnToStart(true) : null} onOpenNurseStation={() => navigate("nurse-station")} onLogout={() => void logoutStaff()} />;
     }
-  } else if (page === "idle") pageContent = <StartScreen confirmation={clearConfirmation} onStart={() => { setClearConfirmation(""); navigate("language"); }} />;
-  else if (page === "language") pageContent = <LanguageSelection onSelect={(value) => { setLanguage(value); setMessages([{ role: "assistant", content: greeting(value) }]); navigate("mode"); }} onBack={() => resetLocalSession()} />;
-  else if (page === "mode") pageContent = <ModeSelection language={language} onSelect={(value) => { setInteractionMode(value); navigate("consent"); }} onBack={() => navigate("language")} />;
-  else if (page === "consent") pageContent = <ConsentScreen language={language} interactionMode={interactionMode} onAgree={() => void startSecureSession()} onDecline={() => resetLocalSession()} onClearData={() => void returnToStart(true)} actionError={error} isSubmitting={isStartingSession} />;
+  } else if (page === "idle") pageContent = <StartScreen confirmation={clearConfirmation} onStart={() => { setClearConfirmation(""); navigate("consent"); }} />;
+  else if (page === "consent") pageContent = <ConsentScreen onAgree={() => void startSecureSession()} onDecline={() => resetLocalSession()} onClearData={() => resetLocalSession()} actionError={error} isSubmitting={isStartingSession} />;
+  else if (page === "language") pageContent = <LanguageSelection onSelect={(value) => { setLanguage(value); setMessages([{ role: "assistant", content: greeting(value) }]); navigate("mode"); }} onBack={() => void returnToStart(false)} />;
+  else if (page === "mode") pageContent = <ModeSelection language={language} onSelect={(value) => void chooseInteractionMode(value)} onBack={() => navigate("language")} />;
   else if (page === "patient") pageContent = <PatientIdentification language={language} interactionMode={interactionMode} sessionId={sessionId} sessionToken={sessionToken} onComplete={(patient) => { setPatientInfo(patient); navigate("department"); }} onBack={() => void returnToStart(false)} onClearData={() => void returnToStart(true)} />;
   else if (page === "department") pageContent = <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(value) => void chooseDepartment(value)} onBack={() => navigate("patient")} onClearData={() => void returnToStart(true)} />;
   else if (page === "documents") pageContent = <DocumentScanner language={language} interactionMode={interactionMode} initialDocuments={scannedDocuments} onDocumentsChange={(docs) => void persistDocuments(docs)} onDone={(docs) => { void persistDocuments(docs); navigate("chat"); }} onBack={() => navigate("chat")} onClearData={() => void returnToStart(true)} />;

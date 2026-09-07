@@ -50,6 +50,16 @@
 - [x] Testing with sample patients: ran all 3 of docs/conversation_scripts.md's scripts as real multi-turn /chat conversations against the live backend (general OPD chest pain, red-flag chest pain + breathlessness, AYUSH digestive complaint) - not scripted replays, genuine Ollama inference each turn. Verified: no false-positive red flag on the benign case, the red-flag case correctly triggers on its first turn and lands in the Nurse Station feed with the right reason/source, AYUSH fields populate for the ayush script, and a full ABDM push produces a correct Bundle from the resulting session data. See Known gaps for a data-extraction completeness observation worth being aware of before the live demo.
 - [ ] Backup demo video
 
+## Future redesign phases
+- [x] Phase 1 foundation: consent-first session lifecycle; language and Speak/Chat preferences saved after consent; individually attributable nurse/doctor/admin staff accounts; role-restricted staff APIs; explicit logout; append-only hash-chained audit events for consent, identity, clinical turns, alerts, record access, and exports. Regression suite expanded to 14 checks and the patient/staff browser flows were visually verified.
+- [ ] Phase 2 touchscreen and orb redesign: split patient interaction into the centered Speak experience and the orb-free Chat experience, with finger-sized controls and manual fallbacks.
+- [ ] Phase 3 adaptive clinical controller: natural model phrasing, coverage-state tracking, early allergies/medications, contradiction handling, and deterministic fallback after repeated model failures.
+- [ ] Phase 4 pluggable realtime speech: provider boundary, Bhashini API option, self-hosted AI4Bharat option, interruption, streaming, and local fallback.
+- [ ] Phase 5 clinically separated AYUSH profiles: shared safety intake plus an Ayurveda-specific assessment and practitioner-confirmed Prakriti/Dashavidha provenance.
+- [ ] Phase 6 clinician workflow: structured doctor editing, version history, sign-off, patient/doctor PDFs, handwriting routing, and formulary-assisted medication confirmation.
+- [ ] Phase 7 real ABDM integration: hybrid Medi ID/ABHA identity, ABDM R4 OPConsultRecord/DocumentBundle validation, Sandbox M1, HIP M2, and HIU M3.
+- [ ] Phase 8 multi-kiosk and deployment validation: central records, global abuse controls, TLS, alert escalation, clinical datasets, physical touch/microphone testing, and fleet observability.
+
 ## Known gaps
 - [x] Engineering audit remediation completed on 2026-09-05: all B01-B40 findings in `docs/BUG_AUDIT_2026-09-05.md` were fixed. Added authenticated SQLite-backed sessions, scoped patient/staff authorization, deterministic emergency persistence, strict clinical schema validation, complete interview scheduling, physician-review export gating, refresh recovery, bilingual patient UI, request/audio/recording lifecycle cleanup, fixed-port launchers, and isolated regression coverage. Final checks: backend regressions 12/12, frontend production build, Python compile, schema parse, `pip check`, `git diff --check`, npm production audit (0 advisories), and a browser walkthrough of the Hindi patient journey plus English staff views.
 - (Resolved) Hindi audio now uses a real Piper voice (hi_IN-pratham-medium); browser speechSynthesis is a last-resort fallback only.

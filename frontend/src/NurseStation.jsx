@@ -17,7 +17,7 @@ function formatTimeAgo(isoString) {
 // keyword check + LLM secondary check, combined server-side) and lets staff
 // acknowledge each one. No websockets - simple polling fits the hackathon
 // scale and keeps the backend stateless-ish and easy to reason about.
-function NurseStation({ onBack, staffToken, onSessionExpired, onLogout }) {
+function NurseStation({ onBack, staffToken, staffUser, onSessionExpired, onLogout }) {
   const [alerts, setAlerts] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
@@ -81,6 +81,7 @@ function NurseStation({ onBack, staffToken, onSessionExpired, onLogout }) {
         <div>
           <p className="eyebrow">MediKiosk · Nurse Station</p>
           <h1>Live red-flag alerts</h1>
+          {staffUser && <p className="staff-pin-copy">Signed in as {staffUser.display_name} · {staffUser.role}</p>}
           <p className="subtitle">
             {alerts.length > 0
               ? `${alerts.length} patient${alerts.length === 1 ? "" : "s"} need immediate attention`
@@ -89,7 +90,7 @@ function NurseStation({ onBack, staffToken, onSessionExpired, onLogout }) {
         </div>
         <div className="dashboard-actions">
           {onLogout && <button className="back-link" type="button" onClick={onLogout}>Lock staff view</button>}
-          <button className="back-link" type="button" onClick={onBack}>← Back to dashboard</button>
+          {onBack && <button className="back-link" type="button" onClick={onBack}>← Back to dashboard</button>}
         </div>
       </header>
 

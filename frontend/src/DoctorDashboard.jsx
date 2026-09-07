@@ -111,7 +111,7 @@ function ListValue({ items }) {
   return <SafeValue value={items} />;
 }
 
-function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, department, sessionId, mediId, patientName, language, staffToken, onSessionExpired, onLoadSession, onBack, onClearData, onOpenNurseStation, onLogout }) {
+function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, department, sessionId, mediId, patientName, language, staffToken, staffUser, onSessionExpired, onLoadSession, onBack, onClearData, onOpenNurseStation, onLogout }) {
   const patient = patientData || {};
   const hpi = patient.hpi || {};
   const drugHistory = patient.drug_allergy_history || {};
@@ -246,6 +246,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
           <p className="eyebrow">MediKiosk · Physician view</p>
           <h1>Patient summary</h1>
           <p className="subtitle">Review the structured history before the consultation.</p>
+          {staffUser && <p className="staff-pin-copy">Signed in as {staffUser.display_name} · {staffUser.role}</p>}
         </div>
         <div className="dashboard-actions">
           {onClearData && <ClearDataButton language={language} onClearData={onClearData} />}

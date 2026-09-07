@@ -1,31 +1,29 @@
 import { useState } from "react";
 import { apiFetch } from "./api";
 
-// Hackathon-simple staff gate: one shared PIN, verified server-side (backend/.env
-// STAFF_PIN) so it isn't just sitting in the frontend bundle. Not real per-user
-// auth - matches the "prototype, not production" scope of the rest of the app.
 function StaffPinGate({ onSuccess, onBack }) {
+  const [username, setUsername] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
 
   async function submitPin(event) {
     event.preventDefault();
-    if (!pin.trim() || isVerifying) return;
+    if (!username.trim() || !pin.trim() || isVerifying) return;
     setIsVerifying(true);
     setError("");
     try {
-      const response = await apiFetch("/staff/verify-pin", {
+      const response = await apiFetch("/staff/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin: pin.trim() }),
+        body: JSON.stringify({ username: username.trim().toLowerCase(), pin: pin.trim() }),
       });
       if (!response.ok) {
         const result = await response.json().catch(() => ({}));
         throw new Error(result.detail || "Incorrect PIN.");
       }
       const result = await response.json();
-      onSuccess(result.token);
+      onSuccess(result);
     } catch (verifyError) {
       setError(verifyError.message || "Unable to verify the PIN.");
       setPin("");
@@ -39,20 +37,31 @@ function StaffPinGate({ onSuccess, onBack }) {
       <div className="staff-pin-shell">
         <section className="chief-complaint-card staff-pin-card">
           <div className="section-kicker">MediKiosk · Staff access</div>
-          <h1 className="staff-pin-heading">Enter staff PIN</h1>
-          <p className="staff-pin-copy">This area is for hospital staff only.</p>
+          <h1 className="staff-pin-heading">Staff sign in</h1>
+          <p className="staff-pin-copy">Use your individual staff ID and PIN.</p>
           <form className="staff-pin-form" onSubmit={submitPin}>
+            <input
+              type="text"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoFocus
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="Staff ID"
+              aria-label="Staff ID"
+              disabled={isVerifying}
+            />
             <input
               type="password"
               inputMode="numeric"
-              autoFocus
+              autoComplete="current-password"
               value={pin}
               onChange={(event) => setPin(event.target.value)}
               placeholder="PIN"
               aria-label="Staff PIN"
               disabled={isVerifying}
             />
-            <button type="submit" disabled={!pin.trim() || isVerifying}>
+            <button type="submit" disabled={!username.trim() || !pin.trim() || isVerifying}>
               {isVerifying ? "Checking..." : "Unlock"}
             </button>
           </form>

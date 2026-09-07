@@ -25,6 +25,7 @@ BASE_URL = "http://127.0.0.1:8080"
 DATABASE_PATH = Path(__file__).resolve().parent / "medikiosk.db"
 load_dotenv(Path(__file__).resolve().parent / ".env")
 STAFF_PIN = os.environ.get("STAFF_PIN", "1234")
+STAFF_USERNAME = os.environ.get("STAFF_USERNAME", "admin")
 TIMEOUT_SECONDS = 90
 results: list[tuple[str, bool, str]] = []
 
@@ -107,7 +108,7 @@ def main():
         record("Backend health", status == 200 and health and health.get("status") == "ok", f"status={status} {health}")
         record("Configured Ollama model available", bool(health and health.get("ollama") == "ok"), str(health))
 
-        status, staff = request_json("POST", "/staff/verify-pin", {"pin": STAFF_PIN})
+        status, staff = request_json("POST", "/staff/login", {"username": STAFF_USERNAME, "pin": STAFF_PIN})
         staff_token = staff.get("token") if staff else None
         record("Staff authentication", status == 200 and bool(staff_token), f"status={status}")
         staff_headers = {"X-Staff-Token": staff_token} if staff_token else {}
@@ -115,11 +116,17 @@ def main():
         record("Staff API rejects anonymous access", status == 401, f"status={status}")
 
         status, started = request_json("POST", "/sessions/start", {
-            "session_id": session_id, "language": "en", "interaction_mode": "chat", "consent": True,
+            "session_id": session_id, "consent": True,
         })
         session_token = started.get("session_token") if started else None
         patient_headers = {"X-Session-Id": session_id, "X-Session-Token": session_token} if session_token else {}
         record("Consent-backed patient session", status == 200 and bool(session_token), f"status={status}")
+
+        status, _ = request_json(
+            "PATCH", f"/sessions/{session_id}/preferences",
+            {"language": "en", "interaction_mode": "chat"}, patient_headers,
+        )
+        record("Language and mode persistence", status == 200, f"status={status}")
 
         status, patient = request_json("POST", "/patients/register", {
             "name": f"SMOKETEST {suffix}", "phone_number": phone,

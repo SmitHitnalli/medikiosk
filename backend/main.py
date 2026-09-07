@@ -44,7 +44,12 @@ PIPER_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "en_US-lessac-m
 # change needed. Until then, /speak falls back to the English voice for Hindi text.
 PIPER_HINDI_VOICE_PATH = Path(__file__).resolve().parent / "voices" / "hi_IN-pratham-medium.onnx"
 PIPER_HINDI_CONFIG_PATH = Path(__file__).resolve().parent / "voices" / "hi_IN-pratham-medium.onnx.json"
-# Hackathon-simple shared staff PIN, not per-user auth. Set STAFF_PIN in backend/.env to change it.
+# A single configured administrator keeps first-run setup simple. Hospitals can
+# provide STAFF_ACCOUNTS_JSON to provision individually attributable nurse,
+# doctor, and administrator accounts without putting credentials in the UI.
+STAFF_USERNAME = os.environ.get("STAFF_USERNAME", "admin").strip().lower() or "admin"
+STAFF_DISPLAY_NAME = os.environ.get("STAFF_DISPLAY_NAME", "MediKiosk Administrator").strip() or "MediKiosk Administrator"
+STAFF_ROLE = os.environ.get("STAFF_ROLE", "admin").strip().lower() or "admin"
 STAFF_PIN = os.environ.get("STAFF_PIN", "1234")
 STAFF_SESSION_SECONDS = 30 * 60
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
@@ -57,6 +62,7 @@ _piper_voices: dict[str, object] = {}
 _easyocr_reader = None
 _staff_pin_attempts: dict[str, list[float]] = {}
 _staff_pin_lock = threading.Lock()
+_audit_lock = threading.Lock()
 OCR_PROMPT = """You extract structured information from OCR text from a patient's prescription, lab report, or discharge summary. Return JSON only.
 
 Extract only these fields, matching the digitized_documents.extracted_entities structure in docs/schema.json:
@@ -192,15 +198,22 @@ class PrakritiUpdate(BaseModel):
 
 class StaffPinRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    username: str = Field(min_length=2, max_length=80)
     pin: str = Field(min_length=4, max_length=20)
 
 
 class SessionStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     session_id: str = Field(min_length=8, max_length=100)
+    language: Literal["en", "hi"] | None = None
+    interaction_mode: Literal["speak", "chat"] | None = None
+    consent: Literal[True]
+
+
+class SessionPreferencesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     language: Literal["en", "hi"]
     interaction_mode: Literal["speak", "chat"]
-    consent: Literal[True]
 
 
 class SessionDepartmentRequest(BaseModel):
@@ -285,6 +298,48 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _pin_hash(pin: str, salt: bytes) -> str:
+    return hashlib.scrypt(pin.encode("utf-8"), salt=salt, n=2**14, r=8, p=1).hex()
+
+
+def _configured_staff_accounts() -> list[dict[str, str]]:
+    raw = os.environ.get("STAFF_ACCOUNTS_JSON", "").strip()
+    accounts = None
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                accounts = parsed
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("STAFF_ACCOUNTS_JSON must be a valid JSON array") from exc
+    if accounts is None:
+        accounts = [{
+            "username": STAFF_USERNAME,
+            "display_name": STAFF_DISPLAY_NAME,
+            "role": STAFF_ROLE,
+            "pin": STAFF_PIN,
+        }]
+
+    normalized = []
+    seen = set()
+    for account in accounts:
+        if not isinstance(account, dict):
+            raise RuntimeError("Every staff account must be a JSON object")
+        username = str(account.get("username", "")).strip().lower()
+        display_name = str(account.get("display_name", "")).strip()
+        role = str(account.get("role", "")).strip().lower()
+        pin = str(account.get("pin", "")).strip()
+        if not re.fullmatch(r"[a-z0-9._-]{2,80}", username):
+            raise RuntimeError("Staff usernames may contain lowercase letters, numbers, dot, underscore, and hyphen")
+        if username in seen:
+            raise RuntimeError(f"Duplicate staff username: {username}")
+        if not display_name or role not in {"nurse", "doctor", "admin"} or not (4 <= len(pin) <= 20):
+            raise RuntimeError(f"Invalid staff account configuration for {username}")
+        seen.add(username)
+        normalized.append({"username": username, "display_name": display_name, "role": role, "pin": pin})
+    return normalized
+
+
 def _json_load(value: str | None, fallback):
     try:
         parsed = json.loads(value or "")
@@ -365,14 +420,143 @@ def _init_database() -> None:
             """
             CREATE TABLE IF NOT EXISTS staff_sessions (
                 token_hash TEXT PRIMARY KEY,
-                expires_at REAL NOT NULL
+                expires_at REAL NOT NULL,
+                staff_user_id TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS staff_users (
+                user_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                role TEXT NOT NULL,
+                pin_salt TEXT NOT NULL,
+                pin_hash TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                occurred_at TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
+                actor_role TEXT,
+                session_id TEXT,
+                patient_medi_id TEXT,
+                action TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '{}',
+                previous_hash TEXT,
+                event_hash TEXT NOT NULL
             )
             """
         )
         session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(sessions)")}
         if "lookup_failures" not in session_columns:
             connection.execute("ALTER TABLE sessions ADD COLUMN lookup_failures INTEGER NOT NULL DEFAULT 0")
+        staff_session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(staff_sessions)")}
+        if "staff_user_id" not in staff_session_columns:
+            connection.execute("ALTER TABLE staff_sessions ADD COLUMN staff_user_id TEXT")
+        if "created_at" not in staff_session_columns:
+            connection.execute("ALTER TABLE staff_sessions ADD COLUMN created_at TEXT")
+
+        now = datetime.now(timezone.utc).isoformat()
+        configured_usernames = []
+        for account in _configured_staff_accounts():
+            configured_usernames.append(account["username"])
+            user_id = "staff-" + hashlib.sha256(account["username"].encode("utf-8")).hexdigest()[:16]
+            salt = secrets.token_bytes(16)
+            connection.execute(
+                """
+                INSERT INTO staff_users
+                    (user_id, username, display_name, role, pin_salt, pin_hash, active, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(username) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    role = excluded.role,
+                    pin_salt = excluded.pin_salt,
+                    pin_hash = excluded.pin_hash,
+                    active = 1,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    user_id,
+                    account["username"],
+                    account["display_name"],
+                    account["role"],
+                    salt.hex(),
+                    _pin_hash(account["pin"], salt),
+                    now,
+                    now,
+                ),
+            )
+            connection.execute("DELETE FROM staff_sessions WHERE staff_user_id = ?", (user_id,))
+        if configured_usernames:
+            placeholders = ",".join("?" for _ in configured_usernames)
+            connection.execute(
+                f"UPDATE staff_users SET active = 0, updated_at = ? WHERE username NOT IN ({placeholders})",
+                (now, *configured_usernames),
+            )
         connection.commit()
+
+
+def _write_audit_event(
+    action: str,
+    outcome: str = "success",
+    *,
+    actor_type: str,
+    actor_id: str | None = None,
+    actor_role: str | None = None,
+    session_id: str | None = None,
+    patient_medi_id: str | None = None,
+    details: dict | None = None,
+) -> str:
+    event_id = "AUD-" + secrets.token_hex(12).upper()
+    occurred_at = datetime.now(timezone.utc).isoformat()
+    safe_details = details if isinstance(details, dict) else {}
+    canonical = json.dumps(
+        {
+            "event_id": event_id,
+            "occurred_at": occurred_at,
+            "actor_type": actor_type,
+            "actor_id": actor_id,
+            "actor_role": actor_role,
+            "session_id": session_id,
+            "patient_medi_id": patient_medi_id,
+            "action": action,
+            "outcome": outcome,
+            "details": safe_details,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    with _audit_lock, _connect() as connection:
+        previous = connection.execute("SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1").fetchone()
+        previous_hash = previous["event_hash"] if previous else ""
+        event_hash = hashlib.sha256((previous_hash + canonical).encode("utf-8")).hexdigest()
+        connection.execute(
+            """
+            INSERT INTO audit_events
+                (event_id, occurred_at, actor_type, actor_id, actor_role, session_id,
+                 patient_medi_id, action, outcome, details, previous_hash, event_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id, occurred_at, actor_type, actor_id, actor_role, session_id,
+                patient_medi_id, action, outcome, json.dumps(safe_details), previous_hash or None, event_hash,
+            ),
+        )
+        connection.commit()
+    return event_id
 
 
 def _mask_phone_number(phone_number: str) -> str:
@@ -427,47 +611,118 @@ def health() -> dict[str, str]:
     return {"status": "ok", "ollama": "ok" if ollama_ok else "unreachable"}
 
 
-@app.post("/staff/verify-pin")
-def verify_staff_pin(payload: StaffPinRequest, request: Request) -> dict:
-    client_key = request.client.host if request.client else "local"
+@app.post("/staff/login")
+def login_staff(payload: StaffPinRequest, request: Request) -> dict:
+    username = payload.username.strip().lower()
+    remote_address = request.client.host if request.client else "local"
+    client_key = f"{remote_address}:{username}"
     now_epoch = time.time()
     with _staff_pin_lock:
         recent = [value for value in _staff_pin_attempts.get(client_key, []) if now_epoch - value < 300]
         _staff_pin_attempts[client_key] = recent
         if len(recent) >= 5:
+            _write_audit_event(
+                "staff.login", "blocked", actor_type="staff", actor_id=username,
+                details={"reason": "rate_limited", "remote_address": remote_address},
+            )
             raise HTTPException(status_code=429, detail="Too many incorrect PIN attempts. Try again in five minutes.")
-    if payload.pin.strip() != STAFF_PIN:
+    with _connect() as connection:
+        staff_user = connection.execute(
+            "SELECT * FROM staff_users WHERE username = ?",
+            (username,),
+        ).fetchone()
+    valid_pin = False
+    if staff_user is not None and staff_user["active"]:
+        salt = bytes.fromhex(staff_user["pin_salt"])
+        valid_pin = secrets.compare_digest(staff_user["pin_hash"], _pin_hash(payload.pin.strip(), salt))
+    else:
+        _pin_hash(payload.pin.strip(), b"medikiosk-login")
+    if not valid_pin:
         with _staff_pin_lock:
             _staff_pin_attempts.setdefault(client_key, []).append(now_epoch)
-        raise HTTPException(status_code=401, detail="Incorrect PIN")
+        _write_audit_event(
+            "staff.login", "failure", actor_type="staff", actor_id=username,
+            details={"reason": "invalid_credentials", "remote_address": remote_address},
+        )
+        raise HTTPException(status_code=401, detail="Incorrect staff ID or PIN")
     with _staff_pin_lock:
         _staff_pin_attempts.pop(client_key, None)
     token = secrets.token_urlsafe(32)
     expires_at = time.time() + STAFF_SESSION_SECONDS
+    created_at = datetime.now(timezone.utc).isoformat()
     with _connect() as connection:
         connection.execute("DELETE FROM staff_sessions WHERE expires_at <= ?", (time.time(),))
         connection.execute(
-            "INSERT INTO staff_sessions (token_hash, expires_at) VALUES (?, ?)",
-            (_token_hash(token), expires_at),
+            "INSERT INTO staff_sessions (token_hash, expires_at, staff_user_id, created_at) VALUES (?, ?, ?, ?)",
+            (_token_hash(token), expires_at, staff_user["user_id"], created_at),
         )
         connection.commit()
-    return {"ok": True, "token": token, "expires_at": datetime.fromtimestamp(expires_at, timezone.utc).isoformat()}
+    _write_audit_event(
+        "staff.login", actor_type="staff", actor_id=staff_user["user_id"], actor_role=staff_user["role"],
+        details={"remote_address": remote_address},
+    )
+    return {
+        "ok": True,
+        "token": token,
+        "expires_at": datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+        "user": {
+            "user_id": staff_user["user_id"],
+            "username": staff_user["username"],
+            "display_name": staff_user["display_name"],
+            "role": staff_user["role"],
+        },
+    }
 
 
-def require_staff(x_staff_token: str | None = Header(default=None)) -> str:
+def require_staff(x_staff_token: str | None = Header(default=None)) -> dict[str, str]:
     if not x_staff_token:
         raise HTTPException(status_code=401, detail="Staff authentication required")
     with _connect() as connection:
         row = connection.execute(
-            "SELECT expires_at FROM staff_sessions WHERE token_hash = ?",
+            """
+            SELECT s.expires_at, u.user_id, u.username, u.display_name, u.role, u.active
+            FROM staff_sessions s
+            JOIN staff_users u ON u.user_id = s.staff_user_id
+            WHERE s.token_hash = ?
+            """,
             (_token_hash(x_staff_token),),
         ).fetchone()
-        if row is None or row["expires_at"] <= time.time():
+        if row is None or row["expires_at"] <= time.time() or not row["active"]:
             if row is not None:
                 connection.execute("DELETE FROM staff_sessions WHERE token_hash = ?", (_token_hash(x_staff_token),))
                 connection.commit()
             raise HTTPException(status_code=401, detail="Staff session expired")
-    return x_staff_token
+    return {
+        "user_id": row["user_id"],
+        "username": row["username"],
+        "display_name": row["display_name"],
+        "role": row["role"],
+        "token": x_staff_token,
+    }
+
+
+def require_roles(*allowed_roles: str):
+    def dependency(staff: dict[str, str] = Depends(require_staff)) -> dict[str, str]:
+        if staff["role"] not in allowed_roles:
+            raise HTTPException(status_code=403, detail="Your staff role cannot perform this action")
+        return staff
+    return dependency
+
+
+@app.get("/staff/me")
+def get_current_staff(staff: dict[str, str] = Depends(require_staff)) -> dict:
+    return {"user": {key: staff[key] for key in ("user_id", "username", "display_name", "role")}}
+
+
+@app.post("/staff/logout")
+def logout_staff(staff: dict[str, str] = Depends(require_staff)) -> dict:
+    with _connect() as connection:
+        connection.execute("DELETE FROM staff_sessions WHERE token_hash = ?", (_token_hash(staff["token"]),))
+        connection.commit()
+    _write_audit_event(
+        "staff.logout", actor_type="staff", actor_id=staff["user_id"], actor_role=staff["role"],
+    )
+    return {"ok": True}
 
 
 def _require_session(session_id: str, token: str | None) -> sqlite3.Row:
@@ -493,6 +748,8 @@ def _session_headers(
 def start_session(request: SessionStartRequest) -> dict:
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc).isoformat()
+    language = request.language or ""
+    interaction_mode = request.interaction_mode or ""
     consent = {
         "abha_id": "",
         "consent_given_at": now,
@@ -500,7 +757,9 @@ def start_session(request: SessionStartRequest) -> dict:
     }
     data = ClinicalData(
         session_id=request.session_id,
-        language=request.language,
+        # The clinical document requires a valid language value. It is not used
+        # until the patient explicitly selects and saves their preference.
+        language=language or "en",
         consent=consent,
     ).model_dump()
     try:
@@ -515,8 +774,8 @@ def start_session(request: SessionStartRequest) -> dict:
                 (
                     request.session_id,
                     _token_hash(token),
-                    request.language,
-                    request.interaction_mode,
+                    language,
+                    interaction_mode,
                     now,
                     json.dumps(data),
                     now,
@@ -525,17 +784,61 @@ def start_session(request: SessionStartRequest) -> dict:
             connection.commit()
     except sqlite3.IntegrityError as exc:
         raise HTTPException(status_code=409, detail="Session ID already exists") from exc
+    _write_audit_event(
+        "patient.consent.accepted",
+        actor_type="patient_session",
+        actor_id=request.session_id,
+        session_id=request.session_id,
+        details={"scope": consent["scope"]},
+    )
     return {"session_id": request.session_id, "session_token": token}
+
+
+@app.patch("/sessions/{session_id}/preferences")
+def set_session_preferences(
+    session_id: str,
+    request: SessionPreferencesRequest,
+    x_session_token: str | None = Header(default=None),
+) -> dict:
+    row = _require_session(session_id, x_session_token)
+    data = ClinicalData.model_validate(_json_load(row["clinical_data"], {})).model_dump()
+    data["language"] = request.language
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as connection:
+        connection.execute(
+            """
+            UPDATE sessions
+            SET language = ?, interaction_mode = ?, clinical_data = ?, updated_at = ?
+            WHERE session_id = ?
+            """,
+            (request.language, request.interaction_mode, json.dumps(data), now, session_id),
+        )
+        connection.commit()
+    _write_audit_event(
+        "patient.preferences.selected",
+        actor_type="patient_session",
+        actor_id=session_id,
+        session_id=session_id,
+        details={"language": request.language, "interaction_mode": request.interaction_mode},
+    )
+    return {"language": request.language, "interaction_mode": request.interaction_mode}
 
 
 @app.delete("/sessions/{session_id}")
 def clear_session(session_id: str, x_session_token: str | None = Header(default=None)) -> dict:
-    _require_session(session_id, x_session_token)
+    session = _require_session(session_id, x_session_token)
     with _connect() as connection:
         connection.execute("DELETE FROM nurse_alerts WHERE session_id = ?", (session_id,))
         connection.execute("DELETE FROM abdm_pushes WHERE session_id = ?", (session_id,))
         connection.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
         connection.commit()
+    _write_audit_event(
+        "patient.session.cleared",
+        actor_type="patient_session",
+        actor_id=session_id,
+        session_id=session_id,
+        patient_medi_id=session["patient_medi_id"],
+    )
     return {"cleared": True, "patient_registry_retained": True}
 
 
@@ -570,6 +873,13 @@ def set_session_department(
             (request.department, datetime.now(timezone.utc).isoformat(), session_id),
         )
         connection.commit()
+    _write_audit_event(
+        "patient.department.selected",
+        actor_type="patient_session",
+        actor_id=session_id,
+        session_id=session_id,
+        details={"department": request.department},
+    )
     return {"department": request.department}
 
 
@@ -589,6 +899,14 @@ def set_session_documents(
             (json.dumps(documents), json.dumps(data), datetime.now(timezone.utc).isoformat(), session_id),
         )
         connection.commit()
+    _write_audit_event(
+        "patient.documents.updated",
+        actor_type="patient_session",
+        actor_id=session_id,
+        session_id=session_id,
+        patient_medi_id=row["patient_medi_id"],
+        details={"document_count": len(documents)},
+    )
     return {"documents": documents}
 
 
@@ -617,6 +935,13 @@ def register_patient(request: PatientRegistration, session: sqlite3.Row = Depend
                     (medi_id, name, json.dumps(data), datetime.now(timezone.utc).isoformat(), session["session_id"]),
                 )
                 connection.commit()
+                _write_audit_event(
+                    "patient.registered",
+                    actor_type="patient_session",
+                    actor_id=session["session_id"],
+                    session_id=session["session_id"],
+                    patient_medi_id=medi_id,
+                )
                 return {"medi_id": medi_id}
             except sqlite3.IntegrityError:
                 continue
@@ -640,6 +965,13 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
                 (datetime.now(timezone.utc).isoformat(), session["session_id"]),
             )
             connection.commit()
+        _write_audit_event(
+            "patient.lookup", "failure",
+            actor_type="patient_session",
+            actor_id=session["session_id"],
+            session_id=session["session_id"],
+            details={"reason": "not_found"},
+        )
         raise HTTPException(status_code=404, detail="Patient not found")
     data = ClinicalData.model_validate(_json_load(session["clinical_data"], {})).model_dump()
     if row["prakriti"]:
@@ -651,6 +983,13 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
             (row["medi_id"], row["name"], json.dumps(data), datetime.now(timezone.utc).isoformat(), session["session_id"]),
         )
         connection.commit()
+    _write_audit_event(
+        "patient.lookup",
+        actor_type="patient_session",
+        actor_id=session["session_id"],
+        session_id=session["session_id"],
+        patient_medi_id=row["medi_id"],
+    )
     return _patient_response(row)
 
 
@@ -676,6 +1015,14 @@ def update_patient_prakriti(
             "SELECT medi_id, name, phone_number, prakriti, created_at FROM patients WHERE medi_id = ?",
             (medi_id,),
         ).fetchone()
+    _write_audit_event(
+        "patient.prakriti.updated",
+        actor_type="patient_session",
+        actor_id=session["session_id"],
+        session_id=session["session_id"],
+        patient_medi_id=medi_id,
+        details={"value_present": bool(prakriti)},
+    )
     return _patient_response(row)
 
 
@@ -1530,6 +1877,14 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
             ),
         )
         connection.commit()
+    _write_audit_event(
+        "clinical.turn.recorded",
+        actor_type="patient_session",
+        actor_id=session_id,
+        session_id=session_id,
+        patient_medi_id=session["patient_medi_id"],
+        details={"turn_count": turn_count, "interview_complete": complete, "red_flag": red_flag},
+    )
     if llm_red_flag:
         _record_nurse_station_alert(
             session_id=session_id,
@@ -1578,10 +1933,17 @@ def _record_nurse_station_alert(
             (alert_id, session_id, kind, patient_name, department, reason, combined_source, triggered_at),
         )
         connection.commit()
+    _write_audit_event(
+        "clinical.alert.raised",
+        actor_type="system" if kind == "red_flag" else "patient_session",
+        actor_id=None if kind == "red_flag" else session_id,
+        session_id=session_id,
+        details={"kind": kind, "source": combined_source},
+    )
 
 
 @app.get("/nurse-station/alerts")
-def get_nurse_station_alerts(_: str = Depends(require_staff)) -> dict:
+def get_nurse_station_alerts(_: dict[str, str] = Depends(require_roles("nurse", "doctor", "admin"))) -> dict:
     with _connect() as connection:
         active = [dict(row) for row in connection.execute("SELECT * FROM nurse_alerts WHERE acknowledged = 0")]
     active.sort(key=lambda alert: alert["triggered_at"])
@@ -1589,7 +1951,10 @@ def get_nurse_station_alerts(_: str = Depends(require_staff)) -> dict:
 
 
 @app.post("/nurse-station/alerts/{alert_id}/acknowledge")
-def acknowledge_nurse_station_alert(alert_id: str, _: str = Depends(require_staff)) -> dict:
+def acknowledge_nurse_station_alert(
+    alert_id: str,
+    staff: dict[str, str] = Depends(require_roles("nurse", "doctor", "admin")),
+) -> dict:
     with _connect() as connection:
         alert = connection.execute("SELECT * FROM nurse_alerts WHERE id = ?", (alert_id,)).fetchone()
         if alert is None:
@@ -1602,7 +1967,15 @@ def acknowledge_nurse_station_alert(alert_id: str, _: str = Depends(require_staf
         connection.commit()
         result = dict(alert)
         result.update({"acknowledged": 1, "acknowledged_at": acknowledged_at})
-        return result
+    _write_audit_event(
+        "clinical.alert.acknowledged",
+        actor_type="staff",
+        actor_id=staff["user_id"],
+        actor_role=staff["role"],
+        session_id=alert["session_id"],
+        details={"alert_id": alert_id, "kind": alert["kind"]},
+    )
+    return result
 
 
 class HelpRequest(BaseModel):
@@ -1782,7 +2155,10 @@ def _build_fhir_bundle(
 
 
 @app.post("/abdm/push")
-def push_to_abdm(request: AbdmPushRequest, _: str = Depends(require_staff)) -> dict:
+def push_to_abdm(
+    request: AbdmPushRequest,
+    staff: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
     session_id = request.session_id.strip()
     with _connect() as connection:
         session = connection.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
@@ -1820,11 +2196,23 @@ def push_to_abdm(request: AbdmPushRequest, _: str = Depends(require_staff)) -> d
             (json.dumps(data), datetime.now(timezone.utc).isoformat(), session_id),
         )
         connection.commit()
+    _write_audit_event(
+        "clinical.record.approved_and_exported",
+        actor_type="staff",
+        actor_id=staff["user_id"],
+        actor_role=staff["role"],
+        session_id=session_id,
+        patient_medi_id=session["patient_medi_id"],
+        details={"destination": "mock_abdm", "reference": record["abdm_reference"]},
+    )
     return record
 
 
 @app.get("/abdm/push/{session_id}")
-def get_abdm_push_status(session_id: str, _: str = Depends(require_staff)) -> dict:
+def get_abdm_push_status(
+    session_id: str,
+    _: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
     with _connect() as connection:
         row = connection.execute("SELECT record FROM abdm_pushes WHERE session_id = ?", (session_id,)).fetchone()
     return _json_load(row["record"], {"pushed": False}) if row else {"pushed": False}
@@ -1858,7 +2246,7 @@ def _staff_session_payload(row: sqlite3.Row, include_record: bool = True) -> dic
 
 
 @app.get("/staff/sessions")
-def list_staff_sessions(_: str = Depends(require_staff)) -> dict:
+def list_staff_sessions(_: dict[str, str] = Depends(require_roles("doctor", "admin"))) -> dict:
     with _connect() as connection:
         rows = connection.execute(
             "SELECT * FROM sessions WHERE patient_medi_id IS NOT NULL ORDER BY updated_at DESC LIMIT 100"
@@ -1867,9 +2255,39 @@ def list_staff_sessions(_: str = Depends(require_staff)) -> dict:
 
 
 @app.get("/staff/sessions/{session_id}")
-def get_staff_session(session_id: str, _: str = Depends(require_staff)) -> dict:
+def get_staff_session(
+    session_id: str,
+    staff: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
     with _connect() as connection:
         row = connection.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="Clinical session not found")
+    _write_audit_event(
+        "clinical.record.viewed",
+        actor_type="staff",
+        actor_id=staff["user_id"],
+        actor_role=staff["role"],
+        session_id=session_id,
+        patient_medi_id=row["patient_medi_id"],
+    )
     return _staff_session_payload(row)
+
+
+@app.get("/staff/audit")
+def list_audit_events(
+    limit: int = 100,
+    _: dict[str, str] = Depends(require_roles("admin")),
+) -> dict:
+    safe_limit = max(1, min(limit, 500))
+    with _connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM audit_events ORDER BY id DESC LIMIT ?",
+            (safe_limit,),
+        ).fetchall()
+    events = []
+    for row in rows:
+        event = dict(row)
+        event["details"] = _json_load(event.get("details"), {})
+        events.append(event)
+    return {"events": events}
