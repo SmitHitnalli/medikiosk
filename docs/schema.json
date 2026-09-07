@@ -62,10 +62,19 @@
       "id": "string",
       "doc_type": "prescription | lab_report | discharge_summary | null",
       "date": "string",
-      "status": "confident | confirmed | illegible",
+      "status": "confident | confirmed | illegible | needs_staff_review",
+      "input_style": "auto | printed | handwritten",
+      "recognition_route": "string",
       "extracted_entities": {
         "diagnoses": ["string"],
         "medications": ["string"],
+        "medication_verification": [
+          {
+            "raw": "string",
+            "matched_generic": "string",
+            "status": "exact | fuzzy | unverified"
+          }
+        ],
         "lab_values": [
           {
             "name": "string",

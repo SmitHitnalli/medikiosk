@@ -154,6 +154,12 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   const [ayushConfirmation, setAyushConfirmation] = useState({ prakriti: "", sara: "", samhanana: "", pramana: "", notes: "" });
   const [ayushSaveState, setAyushSaveState] = useState("idle");
   const [ayushSaveMessage, setAyushSaveMessage] = useState("");
+  const [editValues, setEditValues] = useState({ chief_complaint: "", medications: "", allergies: "", past_medical_history: "", past_surgical_history: "" });
+  const [editReason, setEditReason] = useState("");
+  const [workflowState, setWorkflowState] = useState({ saving: false, signing: false, message: "", error: "" });
+  const [signoff, setSignoff] = useState(null);
+  const [revisions, setRevisions] = useState([]);
+  const [attested, setAttested] = useState(false);
   const speechRequestRef = useRef(null);
 
   useEffect(() => {
@@ -167,6 +173,33 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
     setAyushSaveState("idle");
     setAyushSaveMessage("");
   }, [sessionId, ayush.prakriti, practitionerDashavidha.sara, practitionerDashavidha.samhanana, practitionerDashavidha.pramana, practitionerDashavidha.notes]);
+
+  useEffect(() => {
+    setEditValues({
+      chief_complaint: patient.chief_complaint || "",
+      medications: (drugHistory.current_medications || []).join(", "),
+      allergies: (drugHistory.allergies || []).join(", "),
+      past_medical_history: (patient.past_medical_history || []).join(", "),
+      past_surgical_history: (patient.past_surgical_history || []).join(", "),
+    });
+  }, [sessionId, patient.chief_complaint, drugHistory.current_medications, drugHistory.allergies, patient.past_medical_history, patient.past_surgical_history]);
+
+  useEffect(() => {
+    if (!sessionId || !staffToken) return;
+    (async () => {
+      try {
+        const [sessionResponse, revisionsResponse] = await Promise.all([
+          apiFetch(`/staff/sessions/${encodeURIComponent(sessionId)}`, { headers: staffHeaders(staffToken) }, 10000),
+          apiFetch(`/staff/sessions/${encodeURIComponent(sessionId)}/revisions`, { headers: staffHeaders(staffToken) }, 10000),
+        ]);
+        if (sessionResponse.status === 401 || revisionsResponse.status === 401) return onSessionExpired();
+        if (sessionResponse.ok) setSignoff((await sessionResponse.json()).signoff || null);
+        if (revisionsResponse.ok) setRevisions((await revisionsResponse.json()).revisions || []);
+      } catch {
+        setWorkflowState((current) => ({ ...current, error: "Could not load review history." }));
+      }
+    })();
+  }, [sessionId, staffToken, onSessionExpired]);
 
   // Hydrate any prior mock ABDM push for this session, so re-opening the
   // dashboard (or the physician navigating away and back) still shows it was
@@ -221,8 +254,9 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
         body: JSON.stringify({ session_id: sessionId, physician_reviewed: true }),
       }, 15000);
       if (response.status === 401) return onSessionExpired();
-      if (!response.ok) throw new Error("Could not push to ABDM/HIS.");
-      const result = await response.json();
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || "Could not push to ABDM/HIS.");
+      const result = body;
       setPushRecord(result);
       setPushState("pushed");
     } catch (error) {
@@ -257,6 +291,71 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
       }
     } finally {
       if (speechRequestRef.current === controller) speechRequestRef.current = null;
+    }
+  }
+
+  const splitItems = (value) => value.split(",").map((item) => item.trim()).filter(Boolean);
+
+  async function saveStructuredEdits(event) {
+    event.preventDefault();
+    setWorkflowState({ saving: true, signing: false, message: "", error: "" });
+    try {
+      const response = await apiFetch(`/staff/sessions/${encodeURIComponent(sessionId)}/record`, {
+        method: "PATCH", headers: staffHeaders(staffToken, true),
+        body: JSON.stringify({
+          reason: editReason,
+          changes: {
+            chief_complaint: editValues.chief_complaint,
+            "drug_allergy_history.current_medications": splitItems(editValues.medications),
+            "drug_allergy_history.allergies": splitItems(editValues.allergies),
+            past_medical_history: splitItems(editValues.past_medical_history),
+            past_surgical_history: splitItems(editValues.past_surgical_history),
+          },
+        }),
+      }, 10000);
+      if (response.status === 401) return onSessionExpired();
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "Could not save the clinical edits.");
+      setSignoff(null); setEditReason(""); setPushRecord(null); setPushState("idle");
+      setWorkflowState({ saving: false, signing: false, message: `Saved version ${result.revision.version}. Previous sign-off was cleared.`, error: "" });
+      await onLoadSession(sessionId);
+      const history = await apiFetch(`/staff/sessions/${encodeURIComponent(sessionId)}/revisions`, { headers: staffHeaders(staffToken) });
+      if (history.ok) setRevisions((await history.json()).revisions || []);
+    } catch (error) {
+      setWorkflowState({ saving: false, signing: false, message: "", error: error.message || "Could not save the clinical edits." });
+    }
+  }
+
+  async function signOffRecord() {
+    setWorkflowState({ saving: false, signing: true, message: "", error: "" });
+    try {
+      const response = await apiFetch(`/staff/sessions/${encodeURIComponent(sessionId)}/signoff`, {
+        method: "POST", headers: staffHeaders(staffToken, true), body: JSON.stringify({ attestation: true }),
+      }, 10000);
+      if (response.status === 401) return onSessionExpired();
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "Could not sign off this record.");
+      setSignoff(result.signoff); setAttested(false);
+      setWorkflowState({ saving: false, signing: false, message: `Signed as version ${result.revision.version}.`, error: "" });
+      await onLoadSession(sessionId);
+      const history = await apiFetch(`/staff/sessions/${encodeURIComponent(sessionId)}/revisions`, { headers: staffHeaders(staffToken) });
+      if (history.ok) setRevisions((await history.json()).revisions || []);
+    } catch (error) {
+      setWorkflowState({ saving: false, signing: false, message: "", error: error.message || "Could not sign off this record." });
+    }
+  }
+
+  async function downloadPdf(audience) {
+    setWorkflowState((current) => ({ ...current, error: "" }));
+    try {
+      const response = await apiFetch(`/staff/sessions/${encodeURIComponent(sessionId)}/pdf?audience=${audience}`, { headers: staffHeaders(staffToken) }, 15000);
+      if (response.status === 401) return onSessionExpired();
+      if (!response.ok) { const body = await response.json(); throw new Error(body.detail || "Could not create the PDF."); }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a"); link.href = url; link.download = `medikiosk-${sessionId}-${audience}.pdf`; link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setWorkflowState((current) => ({ ...current, error: error.message || "Could not create the PDF." }));
     }
   }
 
@@ -342,6 +441,31 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
         {speechError && <p className="speech-error" role="alert">{speechError}</p>}
       </section>
 
+      {hasPatientData && sessionId && (
+        <section className="dashboard-card clinical-review-card">
+          <div className="card-heading"><div><p className="section-kicker">Clinician review</p><h2>Edit, sign and issue the record</h2></div><span className="card-icon">✓</span></div>
+          <form className="clinical-edit-form" onSubmit={saveStructuredEdits}>
+            <label className="wide-field">Chief complaint<textarea rows="2" value={editValues.chief_complaint} onChange={(event) => setEditValues((current) => ({ ...current, chief_complaint: event.target.value }))} required /></label>
+            <label>Current medicines<input value={editValues.medications} onChange={(event) => setEditValues((current) => ({ ...current, medications: event.target.value }))} placeholder="Comma separated" /></label>
+            <label>Allergies<input value={editValues.allergies} onChange={(event) => setEditValues((current) => ({ ...current, allergies: event.target.value }))} placeholder="Comma separated" /></label>
+            <label>Past medical history<input value={editValues.past_medical_history} onChange={(event) => setEditValues((current) => ({ ...current, past_medical_history: event.target.value }))} placeholder="Comma separated" /></label>
+            <label>Past surgical history<input value={editValues.past_surgical_history} onChange={(event) => setEditValues((current) => ({ ...current, past_surgical_history: event.target.value }))} placeholder="Comma separated" /></label>
+            <label className="wide-field">Reason for change<input value={editReason} minLength="3" required onChange={(event) => setEditReason(event.target.value)} placeholder="Example: confirmed medicines with patient" /></label>
+            <button className="secondary-start-button" type="submit" disabled={workflowState.saving}>{workflowState.saving ? "Saving..." : "Save new version"}</button>
+          </form>
+          <div className="signoff-panel">
+            {signoff ? (
+              <><p className="abdm-push-status">Signed by {signoff.signed_by_name} at {new Date(signoff.signed_at).toLocaleString()}</p><div className="abdm-push-actions"><button className="play-summary-button" type="button" onClick={() => downloadPdf("patient")}>Patient PDF</button><button className="secondary-start-button" type="button" onClick={() => downloadPdf("clinician")}>Clinician PDF</button></div></>
+            ) : (
+              <><label className="attestation-check"><input type="checkbox" checked={attested} onChange={(event) => setAttested(event.target.checked)} /> I reviewed this history and confirmed it with the patient.</label><button className="play-summary-button" type="button" disabled={!attested || workflowState.signing} onClick={signOffRecord}>{workflowState.signing ? "Signing..." : "Sign off record"}</button></>
+            )}
+          </div>
+          {workflowState.message && <p className="abdm-push-status">{workflowState.message}</p>}
+          {workflowState.error && <p className="speech-error" role="alert">{workflowState.error}</p>}
+          {revisions.length > 0 && <details className="revision-history"><summary>Version history ({revisions.length})</summary><ol>{revisions.map((revision) => <li key={revision.revision_id}><strong>v{revision.version} · {revision.action.replaceAll("_", " ")}</strong> by {revision.actor_name} · {new Date(revision.created_at).toLocaleString()}<br /><span>{revision.reason}{revision.changed_fields.length ? ` · ${revision.changed_fields.join(", ")}` : ""}</span></li>)}</ol></details>}
+        </section>
+      )}
+
       <div className="dashboard-grid">
         <section className="dashboard-card hpi-card">
           <div className="card-heading">
@@ -426,12 +550,13 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
             <div className="card-heading"><div><p className="section-kicker">Digitized documents</p><h2>Scanned by patient</h2></div><span className="card-icon">▣</span></div>
             <ul className="dashboard-doc-list">
               {documents.map((doc) => (
-                <li className={`dashboard-doc-item ${doc.status === "illegible" ? "illegible" : ""}`} key={doc.id}>
+                <li className={`dashboard-doc-item ${["illegible", "needs_staff_review"].includes(doc.status) ? "illegible" : ""}`} key={doc.id}>
                   <div className="dashboard-doc-heading">
                     <span className="dashboard-doc-type">
                       {doc.status === "illegible" ? "Unreadable document" : DOC_TYPE_LABELS[doc.doc_type] || "Document"}
                     </span>
                     {doc.status === "confirmed" && <span className="dashboard-doc-flag">Patient-confirmed type</span>}
+                    {doc.status === "needs_staff_review" && <span className="dashboard-doc-flag">Handwriting: staff confirmation required</span>}
                   </div>
                   {doc.status === "illegible" ? (
                     <p className="dashboard-doc-note">Could not be digitized - ask the patient for the physical copy.</p>
@@ -439,6 +564,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
                     <dl className="stacked-detail dashboard-doc-detail">
                       <div><dt>Diagnoses</dt><dd><ListValue items={doc.extracted_entities?.diagnoses} /></dd></div>
                       <div><dt>Medications</dt><dd><ListValue items={doc.extracted_entities?.medications} /></dd></div>
+                      {doc.extracted_entities?.medication_verification?.length > 0 && <div><dt>Formulary suggestions</dt><dd><ListValue items={doc.extracted_entities.medication_verification.map((item) => item.matched_generic ? `${item.raw} → ${item.matched_generic} (${item.status})` : `${item.raw} → not matched; verify manually`)} /></dd></div>}
                       <div><dt>Lab values</dt><dd><ListValue items={normaliseItems(doc.extracted_entities?.lab_values).map((value) => {
                         const item = typeof value === "string" && value.startsWith("{") ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value;
                         return item && typeof item === "object" ? `${item.name || "Lab value"}: ${[item.value, item.unit].filter(Boolean).join(" ") || "not provided"}${item.reference_range ? ` · range ${item.reference_range}` : ""}${item.flag && item.flag !== "normal" ? ` · ${item.flag}` : ""}` : item;

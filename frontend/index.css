@@ -483,3 +483,42 @@ html[data-high-contrast="true"] .a11y-help.a11y-help-sent { background-color: #6
   .dashboard-shell { padding: 0; background: #fff; }
   .dashboard-card, .chief-complaint-card { break-inside: avoid; box-shadow: none; }
 }
+.clinical-review-card {
+  margin: 1.25rem 0;
+}
+
+.clinical-edit-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.clinical-edit-form label {
+  display: grid;
+  gap: 0.4rem;
+  color: #274b43;
+  font-weight: 700;
+}
+
+.clinical-edit-form input,
+.clinical-edit-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #b7ccc5;
+  border-radius: 12px;
+  padding: 0.8rem;
+  font: inherit;
+}
+
+.clinical-edit-form .wide-field { grid-column: 1 / -1; }
+.signoff-panel { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #dce8e4; }
+.attestation-check { display: flex; align-items: center; gap: 0.65rem; margin-bottom: 0.8rem; }
+.attestation-check input { width: 1.2rem; height: 1.2rem; }
+.revision-history { margin-top: 1rem; }
+.revision-history li { margin: 0.7rem 0; color: #38564f; }
+.scanner-style-choice { display: flex; gap: 0.7rem; justify-content: center; flex-wrap: wrap; }
+
+@media (max-width: 700px) {
+  .clinical-edit-form { grid-template-columns: 1fr; }
+  .clinical-edit-form .wide-field { grid-column: auto; }
+}

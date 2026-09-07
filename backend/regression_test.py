@@ -363,6 +363,65 @@ class MediKioskRegressionTests(unittest.TestCase):
         self.assertEqual(observation["referenceRange"][0]["text"], "70-140")
         self.assertEqual(observation["effectiveDateTime"], "2026-09-05")
 
+    def test_clinician_edits_are_versioned_and_require_fresh_signoff(self):
+        session_id, _, _, _ = self.active_session()
+        staff = self.staff_headers()
+        response = self.client.patch(
+            f"/staff/sessions/{session_id}/record",
+            headers=staff,
+            json={"reason": "Confirmed during review", "changes": {
+                "chief_complaint": "Headache for two days",
+                "drug_allergy_history.current_medications": ["Dolo 650"],
+            }},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["revision"]["version"], 1)
+        self.assertEqual(
+            self.client.patch(
+                f"/staff/sessions/{session_id}/record", headers=staff,
+                json={"reason": "Invalid edit", "changes": {"patient_id": "changed"}},
+            ).status_code,
+            422,
+        )
+        self.assertEqual(
+            self.client.get(f"/staff/sessions/{session_id}/pdf", headers=staff).status_code,
+            409,
+        )
+        signed = self.client.post(
+            f"/staff/sessions/{session_id}/signoff", headers=staff, json={"attestation": True}
+        )
+        self.assertEqual(signed.status_code, 200, signed.text)
+        self.assertEqual(len(signed.json()["signoff"]["signature_hash"]), 64)
+        pdf = self.client.get(
+            f"/staff/sessions/{session_id}/pdf?audience=patient", headers=staff
+        )
+        self.assertEqual(pdf.status_code, 200, pdf.text)
+        self.assertEqual(pdf.headers["content-type"], "application/pdf")
+        self.assertTrue(pdf.content.startswith(b"%PDF"))
+        pushed = self.client.post(
+            "/abdm/push", headers=staff,
+            json={"session_id": session_id, "physician_reviewed": True},
+        )
+        self.assertEqual(pushed.status_code, 200, pushed.text)
+
+        edited_again = self.client.patch(
+            f"/staff/sessions/{session_id}/record", headers=staff,
+            json={"reason": "Patient corrected allergy", "changes": {"drug_allergy_history.allergies": ["Penicillin"]}},
+        )
+        self.assertEqual(edited_again.status_code, 200, edited_again.text)
+        self.assertEqual(self.client.get(f"/staff/sessions/{session_id}/pdf", headers=staff).status_code, 409)
+        self.assertEqual(
+            self.client.post("/abdm/push", headers=staff, json={"session_id": session_id, "physician_reviewed": True}).status_code,
+            409,
+        )
+        history = self.client.get(f"/staff/sessions/{session_id}/revisions", headers=staff).json()["revisions"]
+        self.assertEqual([item["version"] for item in history], [3, 2, 1])
+
+    def test_formulary_matches_are_suggestions(self):
+        entities = main._validate_entities({"medications": ["Dolo 650 mg", "Mystery tablet"]})
+        self.assertEqual(entities["medication_verification"][0]["matched_generic"], "paracetamol")
+        self.assertEqual(entities["medication_verification"][1]["status"], "unverified")
+
     def test_session_clear_removes_visit_but_retains_registry(self):
         session_id, token, headers, medi_id = self.active_session()
         response = self.client.delete(

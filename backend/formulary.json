@@ -1,0 +1,12 @@
+[
+  {"generic": "paracetamol", "aliases": ["acetaminophen", "crocin", "calpol", "dolo"]},
+  {"generic": "ibuprofen", "aliases": ["brufen", "advil"]},
+  {"generic": "amoxicillin", "aliases": ["amoxycillin", "amoxil"]},
+  {"generic": "azithromycin", "aliases": ["azithral", "zithromax"]},
+  {"generic": "metformin", "aliases": ["glycomet", "glucophage"]},
+  {"generic": "amlodipine", "aliases": ["amlong", "norvasc"]},
+  {"generic": "atorvastatin", "aliases": ["atorva", "lipitor"]},
+  {"generic": "pantoprazole", "aliases": ["pantocid", "protonix"]},
+  {"generic": "cetirizine", "aliases": ["zyrtec", "cetzine"]},
+  {"generic": "levothyroxine", "aliases": ["thyroxine", "eltroxin"]}
+]

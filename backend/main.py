@@ -24,10 +24,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse
+from starlette.responses import Response
 
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from PIL import Image
+from clinical_pdf import build_clinical_pdf
 from speech_providers import (
     SpeechProviderError,
     provider_status,
@@ -110,10 +112,20 @@ DOC_TYPE_KEYWORDS = {
 OCR_CONFIDENT_THRESHOLD = 0.55
 OCR_ILLEGIBLE_THRESHOLD = 0.2
 DOC_TYPE_CONFIDENT_THRESHOLD = 0.15
+CLINICIAN_EDITABLE_FIELDS = {
+    "chief_complaint", "hpi.site", "hpi.onset", "hpi.character", "hpi.radiation",
+    "hpi.associated_symptoms", "hpi.timing", "hpi.exacerbating_relieving", "hpi.severity",
+    "past_medical_history", "past_surgical_history", "drug_allergy_history.current_medications",
+    "drug_allergy_history.allergies", "family_history", "personal_history.diet",
+    "personal_history.smoking", "personal_history.alcohol", "personal_history.occupation",
+    "review_of_systems", "ayush_assessment.vikriti", "ayush_assessment.agni",
+    "ayush_assessment.koshtha", "ayush_assessment.nidana", "ayush_assessment.panchakarma_history",
+}
 # Phone-camera photos routinely come in at 3000-4000px+ on the long side, which
 # slows EasyOCR for no accuracy benefit at document-text scale. Cap the long side
 # before running OCR.
 OCR_MAX_IMAGE_DIMENSION = 1600
+FORMULARY_PATH = Path(__file__).resolve().parent / "formulary.json"
 SYSTEM_PROMPT = """You are Nurse Anjali, a warm, experienced clinical intake assistant at an AYUSH hospital in India. You are NOT a diagnostic tool - you only gather and organize a patient's history for the physician to review. You never diagnose, suggest treatment, or name a likely condition.
 
 PERSONA AND TONE:
@@ -214,6 +226,17 @@ class PractitionerAyushConfirmationRequest(BaseModel):
     samhanana: str = Field(default="", max_length=200)
     pramana: str = Field(default="", max_length=200)
     notes: str = Field(default="", max_length=1000)
+
+
+class ClinicalRecordEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    changes: dict[str, object] = Field(min_length=1, max_length=30)
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class ClinicalSignoffRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    attestation: Literal[True]
 
 
 class StaffPinRequest(BaseModel):
@@ -508,6 +531,36 @@ def _init_database() -> None:
                 details TEXT NOT NULL DEFAULT '{}',
                 previous_hash TEXT,
                 event_hash TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS clinical_revisions (
+                revision_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                actor_user_id TEXT NOT NULL,
+                actor_name TEXT NOT NULL,
+                actor_role TEXT NOT NULL,
+                action TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                changed_fields TEXT NOT NULL,
+                clinical_data TEXT NOT NULL,
+                UNIQUE(session_id, version)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS clinical_signoffs (
+                session_id TEXT PRIMARY KEY,
+                revision_id TEXT NOT NULL,
+                signed_at TEXT NOT NULL,
+                signed_by_user_id TEXT NOT NULL,
+                signed_by_name TEXT NOT NULL,
+                signature_hash TEXT NOT NULL
             )
             """
         )
@@ -1214,11 +1267,36 @@ def _validate_entities(value) -> dict:
                     "flag": item.get("flag") if item.get("flag") in {"normal", "high", "low"} else "normal",
                 }
             )
+    medications = _clean_string_list(value.get("medications"))
     return {
         "diagnoses": _clean_string_list(value.get("diagnoses")),
-        "medications": _clean_string_list(value.get("medications")),
+        "medications": medications,
+        "medication_verification": _match_formulary(medications),
         "lab_values": labs,
     }
+
+
+def _match_formulary(medications: list[str]) -> list[dict]:
+    entries = _json_load(FORMULARY_PATH.read_text(encoding="utf-8") if FORMULARY_PATH.exists() else "[]", [])
+    names = {}
+    for entry in entries:
+        generic = str(entry.get("generic") or "").strip().lower()
+        for name in [generic, *(entry.get("aliases") or [])]:
+            if str(name).strip():
+                names[str(name).strip().lower()] = generic
+    results = []
+    for raw in medications:
+        normalized = re.sub(r"[^a-z ]", " ", raw.lower()).strip()
+        tokens = normalized.split()
+        exact = next((name for name in names if name in normalized), None)
+        close = difflib.get_close_matches(tokens[0] if tokens else normalized, list(names), n=1, cutoff=0.78)
+        match = exact or (close[0] if close else None)
+        results.append({
+            "raw": raw,
+            "matched_generic": names.get(match, "") if match else "",
+            "status": "exact" if exact else "fuzzy" if match else "unverified",
+        })
+    return results
 
 
 def _validate_documents(documents) -> list[dict]:
@@ -1232,7 +1310,7 @@ def _validate_documents(documents) -> list[dict]:
         status = document.get("status")
         if doc_type not in {None, "prescription", "lab_report", "discharge_summary"}:
             raise HTTPException(status_code=422, detail="Invalid document type")
-        if status not in {"confident", "confirmed", "illegible"}:
+        if status not in {"confident", "confirmed", "illegible", "needs_staff_review"}:
             raise HTTPException(status_code=422, detail="Invalid document status")
         cleaned.append(
             {
@@ -1240,13 +1318,15 @@ def _validate_documents(documents) -> list[dict]:
                 "doc_type": doc_type,
                 "date": str(document.get("date") or "").strip()[:30],
                 "status": status,
+                "input_style": document.get("input_style") if document.get("input_style") in {"printed", "handwritten", "auto"} else "auto",
+                "recognition_route": str(document.get("recognition_route") or "easyocr_printed")[:100],
                 "extracted_entities": _validate_entities(document.get("extracted_entities")),
             }
         )
     return cleaned
 
 
-def _process_ocr(image_data: bytes, suffix: str, doc_type_hint: str | None) -> dict:
+def _process_ocr(image_data: bytes, suffix: str, doc_type_hint: str | None, document_style: str = "auto") -> dict:
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
@@ -1306,12 +1386,16 @@ def _process_ocr(image_data: bytes, suffix: str, doc_type_hint: str | None) -> d
         )
         parsed = _parse_model_json(_call_ollama(ollama_request))
         entities = parsed.get("extracted_entities", parsed)
+        if document_style == "handwritten":
+            status = "needs_staff_review"
         return {
             "extracted_entities": _validate_entities(entities),
             "confidence": ocr_confidence,
             "suggested_doc_type": suggested_doc_type,
             "doc_type_confidence": doc_type_confidence,
             "status": status,
+            "input_style": document_style,
+            "recognition_route": "easyocr_handwriting_review" if document_style == "handwritten" else "easyocr_printed",
             "extracted_text_preview": extracted_text[:200],
         }
     finally:
@@ -1326,13 +1410,14 @@ def _process_ocr(image_data: bytes, suffix: str, doc_type_hint: str | None) -> d
 async def ocr(
     file: UploadFile = File(...),
     doc_type_hint: Literal["prescription", "lab_report", "discharge_summary"] | None = Form(None),
+    document_style: Literal["auto", "printed", "handwritten"] = Form("auto"),
 ) -> dict:
     suffix = Path(file.filename or "document.jpg").suffix or ".jpg"
     try:
         image_data = await _read_upload(file, {"image/jpeg", "image/png", "image/webp", "application/octet-stream"})
         if suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
             raise HTTPException(status_code=415, detail="Unsupported image file extension")
-        return await run_in_threadpool(_process_ocr, image_data, suffix, doc_type_hint)
+        return await run_in_threadpool(_process_ocr, image_data, suffix, doc_type_hint, document_style)
     except HTTPException:
         raise
     except ImportError as exc:
@@ -2566,10 +2651,13 @@ def push_to_abdm(
     session_id = request.session_id.strip()
     with _connect() as connection:
         session = connection.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+        signoff = connection.execute("SELECT * FROM clinical_signoffs WHERE session_id = ?", (session_id,)).fetchone()
     if session is None:
         raise HTTPException(status_code=404, detail="Clinical session not found")
     if not session["consent_given_at"] or not session["patient_medi_id"]:
         raise HTTPException(status_code=409, detail="The session is not ready for physician review")
+    if signoff is None:
+        raise HTTPException(status_code=409, detail="A clinician must sign off the record before it can be exported")
     data = ClinicalData.model_validate(_json_load(session["clinical_data"], {})).model_dump()
     documents = _validate_documents(_json_load(session["documents"], []))
     data["status"] = "physician_reviewed"
@@ -2639,11 +2727,16 @@ def _staff_session_payload(row: sqlite3.Row, include_record: bool = True) -> dic
         "red_flag": data.get("red_flag", False),
     }
     if include_record:
+        with _connect() as connection:
+            signoff_row = connection.execute(
+                "SELECT * FROM clinical_signoffs WHERE session_id = ?", (row["session_id"],)
+            ).fetchone()
         payload.update(
             {
                 "data": data,
                 "transcript": _json_load(row["transcript"], []),
                 "documents": _validate_documents(_json_load(row["documents"], [])),
+                "signoff": dict(signoff_row) if signoff_row else None,
             }
         )
     return payload
@@ -2676,6 +2769,143 @@ def get_staff_session(
         patient_medi_id=row["patient_medi_id"],
     )
     return _staff_session_payload(row)
+
+
+def _save_revision(connection, row: sqlite3.Row, data: dict, staff: dict, action: str, reason: str, fields: list[str]) -> dict:
+    version = connection.execute(
+        "SELECT COALESCE(MAX(version), 0) + 1 FROM clinical_revisions WHERE session_id = ?",
+        (row["session_id"],),
+    ).fetchone()[0]
+    revision = {
+        "revision_id": "rev-" + secrets.token_hex(12),
+        "version": version,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    connection.execute(
+        """INSERT INTO clinical_revisions
+           (revision_id, session_id, version, created_at, actor_user_id, actor_name, actor_role,
+            action, reason, changed_fields, clinical_data)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (revision["revision_id"], row["session_id"], version, revision["created_at"], staff["user_id"],
+         staff["display_name"], staff["role"], action, reason, json.dumps(fields), json.dumps(data)),
+    )
+    return revision
+
+
+@app.patch("/staff/sessions/{session_id}/record")
+def edit_clinical_record(
+    session_id: str,
+    request: ClinicalRecordEditRequest,
+    staff: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
+    invalid = sorted(set(request.changes) - CLINICIAN_EDITABLE_FIELDS)
+    if invalid:
+        raise HTTPException(status_code=422, detail=f"These fields cannot be edited here: {', '.join(invalid)}")
+    with _connect() as connection:
+        row = connection.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Clinical session not found")
+        data = ClinicalData.model_validate(_json_load(row["clinical_data"], {})).model_dump()
+        for path, value in request.changes.items():
+            _set_nested_value(data, path, value)
+        data["status"] = "draft"
+        try:
+            data = ClinicalData.model_validate(data).model_dump()
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail="One or more edited values have the wrong format") from exc
+        revision = _save_revision(connection, row, data, staff, "edit", request.reason.strip(), sorted(request.changes))
+        now = revision["created_at"]
+        connection.execute("DELETE FROM clinical_signoffs WHERE session_id = ?", (session_id,))
+        connection.execute("DELETE FROM abdm_pushes WHERE session_id = ?", (session_id,))
+        connection.execute(
+            "UPDATE sessions SET clinical_data = ?, status = 'draft', updated_at = ? WHERE session_id = ?",
+            (json.dumps(data), now, session_id),
+        )
+        connection.commit()
+    _write_audit_event(
+        "clinical.record.edited", actor_type="staff", actor_id=staff["user_id"], actor_role=staff["role"],
+        session_id=session_id, patient_medi_id=row["patient_medi_id"],
+        details={"version": revision["version"], "changed_fields": sorted(request.changes), "reason": request.reason.strip()},
+    )
+    return {"data": data, "revision": revision, "signoff": None}
+
+
+@app.get("/staff/sessions/{session_id}/revisions")
+def list_clinical_revisions(
+    session_id: str,
+    _: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
+    with _connect() as connection:
+        rows = connection.execute(
+            """SELECT revision_id, version, created_at, actor_user_id, actor_name, actor_role,
+                      action, reason, changed_fields
+               FROM clinical_revisions WHERE session_id = ? ORDER BY version DESC""",
+            (session_id,),
+        ).fetchall()
+    return {"revisions": [{**dict(row), "changed_fields": _json_load(row["changed_fields"], [])} for row in rows]}
+
+
+@app.post("/staff/sessions/{session_id}/signoff")
+def sign_off_clinical_record(
+    session_id: str,
+    request: ClinicalSignoffRequest,
+    staff: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
+    with _connect() as connection:
+        row = connection.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Clinical session not found")
+        if not row["patient_medi_id"]:
+            raise HTTPException(status_code=409, detail="The session has no registered patient")
+        data = ClinicalData.model_validate(_json_load(row["clinical_data"], {})).model_dump()
+        if not data["chief_complaint"]:
+            raise HTTPException(status_code=409, detail="Add a chief complaint before sign-off")
+        data["status"] = "physician_reviewed"
+        revision = _save_revision(connection, row, data, staff, "sign_off", "Clinician attestation", [])
+        signed_at = revision["created_at"]
+        signature_material = json.dumps(data, sort_keys=True, separators=(",", ":")) + staff["user_id"] + signed_at
+        signature_hash = hashlib.sha256(signature_material.encode("utf-8")).hexdigest()
+        connection.execute(
+            """INSERT OR REPLACE INTO clinical_signoffs
+               (session_id, revision_id, signed_at, signed_by_user_id, signed_by_name, signature_hash)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (session_id, revision["revision_id"], signed_at, staff["user_id"], staff["display_name"], signature_hash),
+        )
+        connection.execute(
+            "UPDATE sessions SET clinical_data = ?, status = 'physician_reviewed', updated_at = ? WHERE session_id = ?",
+            (json.dumps(data), signed_at, session_id),
+        )
+        connection.commit()
+    signoff = {"revision_id": revision["revision_id"], "signed_at": signed_at, "signed_by_user_id": staff["user_id"],
+               "signed_by_name": staff["display_name"], "signature_hash": signature_hash}
+    _write_audit_event(
+        "clinical.record.signed_off", actor_type="staff", actor_id=staff["user_id"], actor_role=staff["role"],
+        session_id=session_id, patient_medi_id=row["patient_medi_id"], details={"version": revision["version"], "signature_hash": signature_hash},
+    )
+    return {"data": data, "revision": revision, "signoff": signoff}
+
+
+@app.get("/staff/sessions/{session_id}/pdf")
+def download_clinical_pdf(
+    session_id: str,
+    audience: Literal["patient", "clinician"] = "clinician",
+    staff: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> Response:
+    with _connect() as connection:
+        row = connection.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+        signoff_row = connection.execute("SELECT * FROM clinical_signoffs WHERE session_id = ?", (session_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Clinical session not found")
+    if signoff_row is None:
+        raise HTTPException(status_code=409, detail="The clinician must sign off this record before creating a PDF")
+    record = _staff_session_payload(row)
+    pdf_bytes = build_clinical_pdf(record, audience, dict(signoff_row))
+    _write_audit_event(
+        "clinical.pdf.generated", actor_type="staff", actor_id=staff["user_id"], actor_role=staff["role"],
+        session_id=session_id, patient_medi_id=row["patient_medi_id"], details={"audience": audience},
+    )
+    filename = f"medikiosk-{session_id[:24]}-{audience}.pdf"
+    return Response(pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.patch("/staff/sessions/{session_id}/ayush-confirmation")
@@ -2716,8 +2946,15 @@ def confirm_ayush_assessment(
         ayush["dashavidha"]["confirmed_by"] = staff["display_name"]
         ayush["dashavidha"]["confirmed_at"] = now
         data = ClinicalData.model_validate(data).model_dump()
+        data["status"] = "draft"
+        revision = _save_revision(
+            connection, row, data, staff, "ayush_confirmation", "Practitioner Ayurveda assessment",
+            ["ayush_assessment.prakriti", "ayush_assessment.dashavidha.practitioner_exam"],
+        )
+        connection.execute("DELETE FROM clinical_signoffs WHERE session_id = ?", (session_id,))
+        connection.execute("DELETE FROM abdm_pushes WHERE session_id = ?", (session_id,))
         connection.execute(
-            "UPDATE sessions SET clinical_data = ?, updated_at = ? WHERE session_id = ?",
+            "UPDATE sessions SET clinical_data = ?, status = 'draft', updated_at = ? WHERE session_id = ?",
             (json.dumps(data), now, session_id),
         )
         connection.execute(
@@ -2740,6 +2977,7 @@ def confirm_ayush_assessment(
         "dashavidha_status": ayush["dashavidha"]["status"],
         "confirmed_by": staff["display_name"],
         "confirmed_at": now,
+        "revision": revision,
     }
 
 

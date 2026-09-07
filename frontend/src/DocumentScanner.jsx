@@ -57,6 +57,7 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDocume
   const [stage, setStage] = useState("idle"); // idle | uploading | review
   const [pendingResult, setPendingResult] = useState(null);
   const [documentDate, setDocumentDate] = useState("");
+  const [documentStyle, setDocumentStyle] = useState("printed");
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
   const activeRef = useRef(true);
@@ -122,6 +123,7 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDocume
     try {
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("document_style", documentStyle);
       const response = await apiFetch("/ocr", { method: "POST", body: formData, signal: controller.signal });
       const result = await response.json();
       if (!activeRef.current || controller.signal.aborted) return;
@@ -153,6 +155,8 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDocume
         doc_type: docType,
         date: documentDate,
         status,
+        input_style: pendingResult?.input_style || documentStyle,
+        recognition_route: pendingResult?.recognition_route || "easyocr_printed",
         extracted_entities: pendingResult?.extracted_entities || { diagnoses: [], medications: [], lab_values: [] },
       },
     ]);
@@ -169,6 +173,8 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDocume
         doc_type: null,
         date: documentDate,
         status: "illegible",
+        input_style: documentStyle,
+        recognition_route: pendingResult?.recognition_route || "manual_review",
         extracted_entities: { diagnoses: [], medications: [], lab_values: [] },
       },
     ]);
@@ -213,6 +219,11 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDocume
         <input ref={fileInputRef} className="visually-hidden" type="file" accept="image/*" capture="environment" onChange={handleFileSelected} />
         {stage === "idle" && (
           <div className="scanner-actions">
+            <div className="scanner-style-choice" role="group" aria-label="Document writing style">
+              <button className={documentStyle === "printed" ? "voice-choice-button selected" : "secondary-start-button"} type="button" onClick={() => setDocumentStyle("printed")}>{isHindi ? "मुद्रित" : "Printed"}</button>
+              <button className={documentStyle === "handwritten" ? "voice-choice-button selected" : "secondary-start-button"} type="button" onClick={() => setDocumentStyle("handwritten")}>{isHindi ? "हस्तलिखित" : "Handwritten"}</button>
+            </div>
+            <p className="scanner-review-detail">{documentStyle === "handwritten" ? (isHindi ? "हस्तलिखित सामग्री को कर्मचारी पुष्टि के लिए भेजा जाएगा।" : "Handwriting will always be routed to staff for confirmation.") : (isHindi ? "मुद्रित दस्तावेज़ स्वचालित रूप से पढ़े जाते हैं।" : "Printed documents are read automatically.")}</p>
             <button className="start-button scanner-scan-button" type="button" onClick={() => fileInputRef.current?.click()}>
               {isHindi ? "दस्तावेज़ स्कैन करें" : "Scan a document"}
             </button>
@@ -258,6 +269,17 @@ function DocumentScanner({ language, interactionMode, initialDocuments, onDocume
                 <button className="secondary-start-button" type="button" onClick={markIllegible}>
                   {isHindi ? "यह दस्तावेज़ पढ़ने योग्य नहीं है" : "This document is unreadable"}
                 </button>
+              </>
+            )}
+
+            {pendingResult.status === "needs_staff_review" && (
+              <>
+                <p className="scanner-review-heading">{isHindi ? "यह हस्तलिखित दस्तावेज़ कर्मचारी द्वारा जाँचा जाएगा।" : "This handwritten document needs staff confirmation."}</p>
+                <p className="scanner-review-detail">{summariseEntities(pendingResult.extracted_entities)}. {isHindi ? "संभावित दवाओं को डॉक्टर से पुष्टि कराएँ।" : "Any medicine matches are suggestions for the clinician, not confirmed prescriptions."}</p>
+                <div className="scanner-type-buttons">
+                  {Object.entries(docLabels).map(([value, label]) => <button className="voice-choice-button" type="button" key={value} onClick={() => addDocument(value, "needs_staff_review")}>{label}</button>)}
+                </div>
+                <button className="secondary-start-button" type="button" onClick={retakePhoto}>{isHindi ? "फिर से फोटो लें" : "Try a clearer photo"}</button>
               </>
             )}
 
