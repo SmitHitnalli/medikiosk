@@ -15,6 +15,7 @@ import SpeakInterview from "./SpeakInterview";
 import SystemStatusGate from "./SystemStatusGate";
 import { apiFetch, patientHeaders, staffHeaders } from "./api";
 import { clearRepeatAudio, playAudioBlob, stopAllAudio } from "./audio";
+import { isCancelCommand, isSwitchToChatCommand, voiceYesNo } from "./voiceFlow";
 
 const SESSION_STORAGE_KEY = "medikiosk-active-session";
 const IDLE_WARNING_MS = 4 * 60 * 1000;
@@ -85,6 +86,7 @@ function App() {
   const [isSending, setIsSending] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [pendingVoiceCommand, setPendingVoiceCommand] = useState("");
   const [scannedDocuments, setScannedDocuments] = useState(stored?.scannedDocuments || []);
   const [error, setError] = useState("");
   const [isStartingSession, setIsStartingSession] = useState(false);
@@ -100,24 +102,43 @@ function App() {
   const requestGenerationRef = useRef(0);
   const controllersRef = useRef(new Set());
   const pageRef = useRef(page);
+  const interactionModeRef = useRef(interactionMode);
+  const pendingVoiceCommandRef = useRef("");
+  const interviewCompleteRef = useRef(interviewComplete);
+  const readBackSummaryRef = useRef(readBackSummary);
+  const readBackConfirmedRef = useRef(readBackConfirmed);
+  const resumePromptRef = useRef("");
   const spokenGreetingSessionRef = useRef("");
 
   useEffect(() => { pageRef.current = page; }, [page]);
+  useEffect(() => { interactionModeRef.current = interactionMode; }, [interactionMode]);
+  useEffect(() => { pendingVoiceCommandRef.current = pendingVoiceCommand; }, [pendingVoiceCommand]);
+  useEffect(() => { interviewCompleteRef.current = interviewComplete; }, [interviewComplete]);
+  useEffect(() => { readBackSummaryRef.current = readBackSummary; }, [readBackSummary]);
+  useEffect(() => { readBackConfirmedRef.current = readBackConfirmed; }, [readBackConfirmed]);
 
-  const abortPatientWork = useCallback(() => {
-    requestGenerationRef.current += 1;
-    controllersRef.current.forEach((controller) => controller.abort());
-    controllersRef.current.clear();
+  // Stops an in-progress recording without letting its onstop handler fire
+  // (which would otherwise send stale audio for transcription after the
+  // patient has already navigated away or switched interaction mode).
+  const discardActiveRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") {
       recorder.onstop = null;
       recorder.stop();
     }
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
+  }, []);
+
+  const abortPatientWork = useCallback(() => {
+    requestGenerationRef.current += 1;
+    controllersRef.current.forEach((controller) => controller.abort());
+    controllersRef.current.clear();
+    discardActiveRecording();
     if (silenceAnimationRef.current) cancelAnimationFrame(silenceAnimationRef.current);
     if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
-    mediaRecorderRef.current = null;
-    mediaStreamRef.current = null;
     audioChunksRef.current = [];
     audioContextRef.current = null;
     analyserRef.current = null;
@@ -126,9 +147,10 @@ function App() {
     silenceAnimationRef.current = null;
     setIsSending(false);
     setIsSpeaking(false);
-    setIsRecording(false);
+    setPendingVoiceCommand("");
+    pendingVoiceCommandRef.current = "";
     stopAllAudio();
-  }, []);
+  }, [discardActiveRecording]);
 
   const resetLocalSession = useCallback((confirmation = "") => {
     abortPatientWork();
@@ -179,23 +201,13 @@ function App() {
 
   const navigate = useCallback((nextPage) => {
     stopAllAudio();
-    if (nextPage !== "chat") {
-      const recorder = mediaRecorderRef.current;
-      if (recorder && recorder.state !== "inactive") {
-        recorder.onstop = null;
-        recorder.stop();
-      }
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-      mediaRecorderRef.current = null;
-      setIsRecording(false);
-    }
+    if (nextPage !== "chat") discardActiveRecording();
     setPage(nextPage);
     const nextUrl = nextPage === "idle"
       ? window.location.pathname + window.location.search
       : `${window.location.pathname}${window.location.search}#${nextPage}`;
     window.history.pushState(null, "", nextUrl);
-  }, []);
+  }, [discardActiveRecording]);
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -332,6 +344,13 @@ function App() {
   async function chooseInteractionMode(value, nextPage = "patient") {
     if (!sessionToken || !language) return;
     setError("");
+    // A mid-interview mode switch (Speak -> Chat) also lands on "chat", which
+    // navigate() otherwise treats as a same-page transition and leaves any
+    // active recording/mic running - tear it down here regardless of target page.
+    discardActiveRecording();
+    // Also drop the "repeat last prompt" memory: a prompt spoken in Speak mode
+    // is stale once the patient has switched away from it.
+    clearRepeatAudio();
     try {
       const response = await apiFetch(`/sessions/${encodeURIComponent(sessionId)}/preferences`, {
         method: "PATCH",
@@ -394,8 +413,24 @@ function App() {
       }
     } finally {
       controllersRef.current.delete(controller);
-      if (requestGenerationRef.current === generation) setIsSpeaking(false);
+      if (requestGenerationRef.current === generation) {
+        setIsSpeaking(false);
+        window.setTimeout(() => {
+          if (requestGenerationRef.current === generation && pageRef.current === "chat" && interactionModeRef.current === "speak") void startRecording();
+        }, 320);
+      }
     }
+  }
+
+  function requestVoiceConfirmation(kind) {
+    const confirmation = kind === "clear"
+      ? (language === "hi" ? "क्या आप वाकई रद्द करके अपना डेटा मिटाना चाहते हैं? हाँ या नहीं कहें।" : "Are you sure you want to cancel and clear your data? Say yes or no.")
+      : (language === "hi" ? "क्या आप वाकई चैट पर जाना चाहते हैं? हाँ या नहीं कहें।" : "Are you sure you want to switch to Chat? Say yes or no.");
+    resumePromptRef.current = [...messages].reverse().find((entry) => entry.role === "assistant")?.content || greeting(language);
+    setPendingVoiceCommand(kind);
+    pendingVoiceCommandRef.current = kind;
+    setMessages((current) => [...current, { role: "assistant", content: confirmation }]);
+    void speakAssistant(confirmation, requestGenerationRef.current);
   }
 
   async function sendTextMessage(text, alreadySending = false) {
@@ -496,7 +531,32 @@ function App() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || "The audio could not be transcribed.");
       if (!result.text?.trim()) throw new Error("No speech was detected. Please try again.");
-      if (generation === requestGenerationRef.current && pageRef.current === "chat") await sendTextMessage(result.text, true);
+      if (generation !== requestGenerationRef.current || pageRef.current !== "chat") return;
+      const transcript = result.text.trim();
+      const command = pendingVoiceCommandRef.current;
+      if (command) {
+        const answer = voiceYesNo(transcript);
+        if (answer === true && command === "clear") return void returnToStart(true);
+        if (answer === true && command === "chat") { pendingVoiceCommandRef.current=""; setPendingVoiceCommand(""); return void chooseInteractionMode("chat", "chat"); }
+        if (answer === false) {
+          pendingVoiceCommandRef.current = "";
+          setPendingVoiceCommand("");
+          const resume = language === "hi" ? `ठीक है। ${resumePromptRef.current}` : `Okay. ${resumePromptRef.current}`;
+          setMessages((current) => [...current, { role:"assistant", content:resume }]);
+          return void speakAssistant(resume, generation);
+        }
+        const retry = language === "hi" ? "कृपया हाँ या नहीं कहें।" : "Please say yes or no.";
+        setMessages((current) => [...current, { role:"assistant", content:retry }]);
+        return void speakAssistant(retry, generation);
+      }
+      if (interviewCompleteRef.current && readBackSummaryRef.current && !readBackConfirmedRef.current) {
+        const answer = voiceYesNo(transcript);
+        if (answer === true) return void confirmReadBack();
+        if (answer === false) return void disputeReadBack();
+      }
+      if (isCancelCommand(transcript)) return requestVoiceConfirmation("clear");
+      if (isSwitchToChatCommand(transcript)) return requestVoiceConfirmation("chat");
+      await sendTextMessage(transcript, true);
     } catch (requestError) {
       if (requestError.name !== "AbortError" && generation === requestGenerationRef.current) setError(requestError.message || "Unable to transcribe the recording.");
     } finally {
@@ -539,7 +599,7 @@ function App() {
   }
 
   async function startRecording() {
-    if (isSending || isRecording || interviewComplete) return;
+    if (isSending || isRecording || (interviewCompleteRef.current && !(readBackSummaryRef.current && !readBackConfirmedRef.current))) return;
     stopAllAudio();
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return setError("Audio recording is not supported in this browser.");
     const generation = requestGenerationRef.current;
@@ -615,22 +675,23 @@ function App() {
   }
 
   let pageContent;
+  const resumePatientPage = !sessionToken ? "idle" : !language ? "language" : !interactionMode ? "mode" : !patientInfo ? "patient" : !department ? "department" : "chat";
   if (STAFF_PAGES.has(page)) {
-    if (!staffToken) pageContent = <StaffPinGate onSuccess={completeStaffLogin} onBack={() => navigate(sessionToken && patientInfo && department ? "chat" : "idle")} />;
+    if (!staffToken) pageContent = <StaffPinGate onSuccess={completeStaffLogin} onBack={() => navigate(resumePatientPage)} />;
     else if (page === "nurse-station" || staffUser?.role === "nurse") pageContent = <NurseStation staffToken={staffToken} staffUser={staffUser} onSessionExpired={expireStaffSession} onBack={staffUser?.role === "nurse" ? null : () => navigate("dashboard")} onLogout={() => void logoutStaff()} />;
     else {
       const record = staffRecord;
-      pageContent = <DoctorDashboard patientData={record?.data || interviewData} documents={record?.documents || scannedDocuments} transcript={record?.transcript || messages} redFlagEvents={record?.data?.red_flag ? [{ reason: record.data.red_flag_reason || "Urgent symptoms detected", source: "recorded", timestamp: record.updated_at }] : redFlagEvents} department={record?.department || department} sessionId={record?.session_id || sessionId} mediId={record?.patient_medi_id || patientInfo?.medi_id} patientName={record?.patient_name || patientInfo?.name} language={record?.language || language} staffToken={staffToken} staffUser={staffUser} onSessionExpired={expireStaffSession} onLoadSession={loadStaffSession} onBack={() => navigate(sessionToken && patientInfo && department ? "chat" : "idle")} onClearData={!record && sessionToken ? () => void returnToStart(true) : null} onOpenNurseStation={() => navigate("nurse-station")} onLogout={() => void logoutStaff()} />;
+      pageContent = <DoctorDashboard patientData={record?.data || interviewData} documents={record?.documents || scannedDocuments} transcript={record?.transcript || messages} redFlagEvents={record?.data?.red_flag ? [{ reason: record.data.red_flag_reason || "Urgent symptoms detected", source: "recorded", timestamp: record.updated_at }] : redFlagEvents} department={record?.department || department} sessionId={record?.session_id || sessionId} mediId={record?.patient_medi_id || patientInfo?.medi_id} patientName={record?.patient_name || patientInfo?.name} language={record?.language || language} staffToken={staffToken} staffUser={staffUser} onSessionExpired={expireStaffSession} onLoadSession={loadStaffSession} onBack={() => navigate(resumePatientPage)} onClearData={!record && sessionToken ? () => void returnToStart(true) : null} onOpenNurseStation={() => navigate("nurse-station")} onLogout={() => void logoutStaff()} />;
     }
   } else if (page === "idle") pageContent = <StartScreen confirmation={clearConfirmation} onDiagnostics={() => navigate("diagnostics")} onStart={() => { setClearConfirmation(""); navigate("consent"); }} />;
   else if (page === "diagnostics") pageContent = <DeviceDiagnostics onBack={() => navigate("idle")} />;
   else if (page === "consent") pageContent = <ConsentScreen onAgree={() => void startSecureSession()} onDecline={() => resetLocalSession()} onClearData={() => resetLocalSession()} actionError={error} isSubmitting={isStartingSession} />;
-  else if (page === "language") pageContent = <LanguageSelection onSelect={(value) => { setLanguage(value); setMessages([{ role: "assistant", content: greeting(value) }]); navigate("mode"); }} onBack={() => void returnToStart(false)} />;
-  else if (page === "mode") pageContent = <ModeSelection language={language} onSelect={(value) => void chooseInteractionMode(value)} onBack={() => navigate("language")} />;
+  else if (page === "language") pageContent = <LanguageSelection onSelect={(value) => { setLanguage(value); setMessages([{ role: "assistant", content: greeting(value) }]); navigate("mode"); }} onBack={() => void returnToStart(false)} onClearData={() => void returnToStart(true)} />;
+  else if (page === "mode") pageContent = <ModeSelection language={language} onSelect={(value) => void chooseInteractionMode(value)} onBack={() => navigate("language")} onClearData={() => void returnToStart(true)} />;
   else if (page === "patient") pageContent = <PatientIdentification language={language} interactionMode={interactionMode} sessionId={sessionId} sessionToken={sessionToken} onComplete={(patient) => { setPatientInfo(patient); navigate("department"); }} onBack={() => void returnToStart(false)} onClearData={() => void returnToStart(true)} />;
   else if (page === "department") pageContent = <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(value) => void chooseDepartment(value)} onBack={() => navigate("patient")} onClearData={() => void returnToStart(true)} />;
   else if (page === "documents") pageContent = <DocumentScanner language={language} interactionMode={interactionMode} initialDocuments={scannedDocuments} onDocumentsChange={(docs) => void persistDocuments(docs)} onDone={(docs) => { void persistDocuments(docs); navigate("chat"); }} onBack={() => navigate("chat")} onClearData={() => void returnToStart(true)} />;
-  else if (interactionMode === "speak") pageContent = <SpeakInterview language={language} messages={messages} redFlagReason={redFlagReason} redFlagCategory={redFlagCategory} isSending={isSending} isSpeaking={isSpeaking} isRecording={isRecording} interviewComplete={interviewComplete} readBackSummary={readBackSummary} readBackConfirmed={readBackConfirmed} onConfirmReadBack={() => void confirmReadBack()} onDisputeReadBack={() => void disputeReadBack()} idleWarning={idleWarning} error={error} documentCount={scannedDocuments.length} message={message} onMessageChange={setMessage} onSend={(value) => void sendTextMessage(value)} onToggleRecording={isRecording ? stopRecording : startRecording} onSwitchToChat={() => void chooseInteractionMode("chat", "chat")} onDocuments={() => navigate("documents")} onDashboard={() => navigate("dashboard")} onClearData={() => void returnToStart(true)} onEraseRegistry={() => void eraseMyRegistry()} />;
+  else if (interactionMode === "speak") pageContent = <SpeakInterview language={language} messages={messages} redFlagReason={redFlagReason} redFlagCategory={redFlagCategory} isSending={isSending} isSpeaking={isSpeaking} isRecording={isRecording} interviewComplete={interviewComplete} readBackSummary={readBackSummary} readBackConfirmed={readBackConfirmed} onConfirmReadBack={() => void confirmReadBack()} onDisputeReadBack={() => void disputeReadBack()} idleWarning={idleWarning} error={error} documentCount={scannedDocuments.length} message={message} onMessageChange={setMessage} onSend={(value) => void sendTextMessage(value)} onToggleRecording={isRecording ? stopRecording : startRecording} onSwitchToChat={() => requestVoiceConfirmation("chat")} onDocuments={() => navigate("documents")} onDashboard={() => navigate("dashboard")} onClearData={() => void returnToStart(true)} onEraseRegistry={() => void eraseMyRegistry()} />;
   else pageContent = (
     <main className="app-shell">
       <section className="chat-card" aria-label="MediKiosk patient interview">

@@ -269,6 +269,17 @@ class PractitionerAyushConfirmationRequest(BaseModel):
     sara: str = Field(default="", max_length=200)
     samhanana: str = Field(default="", max_length=200)
     pramana: str = Field(default="", max_length=200)
+    darshana: str = Field(default="", max_length=200)
+    sparshana: str = Field(default="", max_length=200)
+    prashna: str = Field(default="", max_length=200)
+    nadi: str = Field(default="", max_length=200)
+    mutra: str = Field(default="", max_length=200)
+    mala: str = Field(default="", max_length=200)
+    jihva: str = Field(default="", max_length=200)
+    shabda: str = Field(default="", max_length=200)
+    sparsha: str = Field(default="", max_length=200)
+    drik: str = Field(default="", max_length=200)
+    akriti: str = Field(default="", max_length=200)
     notes: str = Field(default="", max_length=1000)
 
 
@@ -331,7 +342,8 @@ class DrugAllergyHistory(BaseModel):
     allergies: list[str] = Field(default_factory=list)
 
 
-class PersonalHistory(BaseModel):
+class AharaViharaHistory(BaseModel):
+    """Ahara-Vihara (diet and lifestyle) history, per the problem statement's vocabulary."""
     model_config = ConfigDict(extra="forbid", strict=True)
     diet: str = ""
     smoking: bool | None = None
@@ -349,10 +361,25 @@ class DashavidhaPatientReported(BaseModel):
 
 
 class DashavidhaPractitionerExam(BaseModel):
+    """Practitioner-only examination fields. These are structural placeholders for the
+    doctor to fill in during examination, not part of the kiosk patient interview."""
     model_config = ConfigDict(extra="forbid", strict=True)
     sara: str = ""
     samhanana: str = ""
     pramana: str = ""
+    # Trividha Pariksha (threefold examination)
+    darshana: str = ""
+    sparshana: str = ""
+    prashna: str = ""
+    # Ashtavidha Pariksha (eightfold examination)
+    nadi: str = ""
+    mutra: str = ""
+    mala: str = ""
+    jihva: str = ""
+    shabda: str = ""
+    sparsha: str = ""
+    drik: str = ""
+    akriti: str = ""
     notes: str = ""
 
 
@@ -391,7 +418,7 @@ class ClinicalData(BaseModel):
     past_surgical_history: list[str] = Field(default_factory=list)
     drug_allergy_history: DrugAllergyHistory = Field(default_factory=DrugAllergyHistory)
     family_history: list[str] = Field(default_factory=list)
-    personal_history: PersonalHistory = Field(default_factory=PersonalHistory)
+    personal_history: AharaViharaHistory = Field(default_factory=AharaViharaHistory)
     review_of_systems: dict[str, str | bool | list[str]] = Field(default_factory=dict)
     ayush_assessment: AyushAssessment = Field(default_factory=AyushAssessment)
     digitized_documents: list[dict] = Field(default_factory=list)
@@ -1406,7 +1433,10 @@ def _get_whisper_model():
 
 
 async def _read_upload(file: UploadFile, allowed_types: set[str]) -> bytes:
-    content_type = (file.content_type or "").lower()
+    # Browsers commonly append codec parameters (for example
+    # ``audio/webm;codecs=opus``). Validate the media type itself while keeping
+    # the existing extension and size checks below.
+    content_type = (file.content_type or "").lower().split(";", 1)[0].strip()
     if content_type and content_type not in allowed_types:
         raise HTTPException(status_code=415, detail="Unsupported file type")
     data = await file.read(MAX_UPLOAD_BYTES + 1)
@@ -1443,7 +1473,7 @@ async def transcribe(
     try:
         audio_data = await _read_upload(
             file,
-            {"audio/webm", "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "application/octet-stream"},
+            {"audio/webm", "video/webm", "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/ogg", "application/ogg", "application/octet-stream"},
         )
         suffix = Path(file.filename or "audio.webm").suffix or ".webm"
         if suffix.lower() not in {".webm", ".wav", ".mp3", ".m4a", ".mp4", ".ogg"}:
@@ -3776,6 +3806,17 @@ def confirm_ayush_assessment(
             "sara": request.sara.strip(),
             "samhanana": request.samhanana.strip(),
             "pramana": request.pramana.strip(),
+            "darshana": request.darshana.strip(),
+            "sparshana": request.sparshana.strip(),
+            "prashna": request.prashna.strip(),
+            "nadi": request.nadi.strip(),
+            "mutra": request.mutra.strip(),
+            "mala": request.mala.strip(),
+            "jihva": request.jihva.strip(),
+            "shabda": request.shabda.strip(),
+            "sparsha": request.sparsha.strip(),
+            "drik": request.drik.strip(),
+            "akriti": request.akriti.strip(),
             "notes": request.notes.strip(),
         })
         completed_exam = all(practitioner_exam[field] for field in ("sara", "samhanana", "pramana"))

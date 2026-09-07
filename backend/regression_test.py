@@ -9,6 +9,7 @@ import json
 import os
 import struct
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import tempfile
 import unittest
 import uuid
@@ -28,6 +29,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
 import speech_providers as speech  # noqa: E402
+import clinical_pdf  # noqa: E402
 
 
 class MediKioskRegressionTests(unittest.TestCase):
@@ -348,6 +350,42 @@ class MediKioskRegressionTests(unittest.TestCase):
             "prior_practitioner_record",
         )
 
+    def test_dashavidha_trividha_and_ashtavidha_placeholders(self):
+        # Phase 4 item 2: Trividha/Ashtavidha Pariksha fields are practitioner-only
+        # placeholders alongside Sara/Samhanana/Pramana, never patient-facing.
+        session_id, _, _, _ = self.active_session("Kayachikitsa")
+        confirmation = {
+            "prakriti": "Vata-Pitta", "sara": "Madhyama", "samhanana": "Madhyama", "pramana": "Sama",
+            "darshana": "Pale complexion", "sparshana": "Cool, dry skin", "prashna": "Reports poor sleep",
+            "nadi": "Vata gati", "mutra": "Normal", "mala": "Regular", "jihva": "Coated",
+            "shabda": "Clear", "sparsha": "Dry", "drik": "Alert", "akriti": "Slim",
+            "notes": "Full Trividha and Ashtavidha exam recorded.",
+        }
+        response = self.client.patch(
+            f"/staff/sessions/{session_id}/ayush-confirmation", headers=self.staff_headers(), json=confirmation,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        exam = response.json()["data"]["ayush_assessment"]["dashavidha"]["practitioner_exam"]
+        for field in ("darshana", "sparshana", "prashna", "nadi", "mutra", "mala", "jihva", "shabda", "sparsha", "drik", "akriti"):
+            self.assertEqual(exam[field], confirmation[field])
+
+    def test_ahara_vihara_history_schema_key_unchanged(self):
+        # Phase 4 item 1: the class was renamed to AharaViharaHistory, but the
+        # wire-format JSON key ("personal_history") must stay unchanged.
+        data = main.ClinicalData(personal_history=main.AharaViharaHistory(diet="Vegetarian")).model_dump()
+        self.assertEqual(data["personal_history"]["diet"], "Vegetarian")
+
+    def test_pdf_uses_bundled_devanagari_font_even_without_os_fonts(self):
+        # Phase 5 item 4: the Devanagari font must be bundled, not dependent on
+        # whatever the host kiosk happens to have installed - and must be
+        # checked ahead of any OS-provided font, in case both are present.
+        self.assertTrue(clinical_pdf._BUNDLED_DEVANAGARI_FONT.exists())
+        self.assertEqual(clinical_pdf._font_name(), "MediKioskUnicode")
+        with patch("clinical_pdf.Path", return_value=Path("/does/not/exist")):
+            # Every OS font lookup now resolves to a missing path; the bundled
+            # font constant is untouched, so it must still win.
+            self.assertEqual(clinical_pdf._font_name(), "MediKioskUnicode")
+
     def test_export_rejects_missing_session_and_keeps_lab_metadata(self):
         staff = self.staff_headers()
         self.assertEqual(
@@ -579,6 +617,17 @@ class MediKioskRegressionTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 main._transcribe_bytes(b"fake-audio-bytes", ".wav")
         self.assertFalse(os.path.exists(seen_paths[-1]))
+
+    def test_transcribe_accepts_browser_codec_content_type(self):
+        """Chromium MediaRecorder appends a codec parameter to audio/webm."""
+        with patch.object(main, "_transcribe_bytes", return_value="yes"):
+            response = self.client.post(
+                "/transcribe",
+                files={"file": ("voice.webm", b"browser-audio", "audio/webm;codecs=opus")},
+                data={"language": "en", "provider": "local"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["text"], "yes")
 
     def test_prakriti_patch_endpoint_always_rejects_patient_writes(self):
         session_id, _, headers, medi_id = self.active_session()

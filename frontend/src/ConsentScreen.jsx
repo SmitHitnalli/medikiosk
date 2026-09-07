@@ -1,95 +1,55 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import ClearDataButton from "./ClearDataButton";
-import { playAudioBlob, stopAllAudio } from "./audio";
-import { apiFetch } from "./api";
+import VoiceOrb from "./VoiceOrb";
+import { useVoiceFlow } from "./voiceFlow";
 
 const CONSENT_PROMPTS = {
-  en: "We will ask you questions about your health and may process documents you choose to share. Your answers will be prepared for a healthcare professional to review. MediKiosk does not diagnose or prescribe treatment. Do you agree to continue?",
-  hi: "हम आपसे आपके स्वास्थ्य के बारे में प्रश्न पूछेंगे और आपके द्वारा साझा किए गए दस्तावेज़ों को संसाधित कर सकते हैं। आपके उत्तर स्वास्थ्यकर्मी की समीक्षा के लिए तैयार किए जाएंगे। MediKiosk निदान या उपचार निर्धारित नहीं करता। क्या आप आगे बढ़ने के लिए सहमत हैं?",
+  en: "MediKiosk will ask about your health and process only the documents you choose to share. Your answers are prepared for a healthcare professional. It does not diagnose or prescribe. Do you agree to continue?",
+  hi: "मेडीकियोस्क आपसे आपके स्वास्थ्य के बारे में प्रश्न पूछेगा और केवल आपके चुने हुए दस्तावेज़ों को पढ़ेगा। आपके उत्तर स्वास्थ्यकर्मी की समीक्षा के लिए तैयार किए जाएंगे। यह निदान या दवा नहीं देता। क्या आप आगे बढ़ने के लिए सहमत हैं?",
 };
 
-function playBrowserHindi(text) {
-  if (!window.speechSynthesis) return Promise.reject(new Error("Hindi audio is unavailable."));
-  return new Promise((resolve) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "hi-IN";
-    utterance.onend = resolve;
-    utterance.onerror = resolve;
-    window.speechSynthesis.speak(utterance);
-  });
-}
-
 function ConsentScreen({ onAgree, onDecline, onClearData, actionError, isSubmitting }) {
-  const [playingLanguage, setPlayingLanguage] = useState(null);
-  const requestRef = useRef(null);
+  const voice = useVoiceFlow("en");
+  const startedRef = useRef(false);
 
-  useEffect(() => () => {
-    requestRef.current?.abort();
-    stopAllAudio();
-  }, []);
-
-  async function playConsent(language) {
-    requestRef.current?.abort();
-    stopAllAudio();
-    const controller = new AbortController();
-    requestRef.current = controller;
-    setPlayingLanguage(language);
-    try {
-      const response = await apiFetch("/speak", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: CONSENT_PROMPTS[language], language }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("Consent audio unavailable");
-      const audioBlob = await response.blob();
-      try {
-        await playAudioBlob(audioBlob);
-      } catch (playbackError) {
-        if (language === "hi" && playbackError.message !== "Audio playback stopped.") {
-          await playBrowserHindi(CONSENT_PROMPTS.hi);
-        } else {
-          throw playbackError;
-        }
-      }
-    } catch (error) {
-      if (error.name !== "AbortError" && error.message !== "Audio playback stopped.") {
-        setPlayingLanguage("unavailable");
-      }
-    } finally {
-      if (requestRef.current === controller) {
-        requestRef.current = null;
-        setPlayingLanguage(null);
-      }
-    }
-  }
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    (async () => {
+      await voice.speak(CONSENT_PROMPTS.en, "en");
+      await voice.speak(CONSENT_PROMPTS.hi, "hi");
+    })().catch(() => {});
+  }, [voice.speak]);
 
   return (
-    <main className="start-shell">
+    <main className="start-shell consent-shell">
       <section className="start-card consent-card" aria-label="Consent screen">
-        <div className="brand-mark small" aria-hidden="true">M</div>
-        <p className="start-eyebrow">MediKiosk · Consent / सहमति</p>
-        <h1>Before we begin / शुरू करने से पहले</h1>
-        <div className="consent-language-block" lang="en">
-          <p className="consent-copy">{CONSENT_PROMPTS.en}</p>
-          <button className="consent-listen-button" type="button" onClick={() => void playConsent("en")} disabled={Boolean(playingLanguage)}>
-            {playingLanguage === "en" ? "Playing…" : "Listen in English"}
-          </button>
+        <div className="consent-hero">
+          <VoiceOrb compact state={voice.state} label={voice.state === "speaking" ? "Speaking · बोल रहा है" : "Privacy first · गोपनीयता पहले"} />
+          <div>
+            <p className="start-eyebrow">MediKiosk · Consent / सहमति</p>
+            <h1>Your information stays under your control.</h1>
+            <p className="consent-hindi-title">आपकी जानकारी पर आपका नियंत्रण रहता है।</p>
+          </div>
         </div>
-        <div className="consent-language-block" lang="hi">
-          <p className="consent-copy">{CONSENT_PROMPTS.hi}</p>
-          <button className="consent-listen-button" type="button" onClick={() => void playConsent("hi")} disabled={Boolean(playingLanguage)}>
-            {playingLanguage === "hi" ? "सुनाया जा रहा है…" : "हिन्दी में सुनें"}
-          </button>
+        <div className="consent-summary-grid">
+          <article><span>01</span><strong>Health history</strong><p>We prepare a structured summary for clinical review.</p></article>
+          <article><span>02</span><strong>Your choice</strong><p>You may cancel and clear this visit at any time.</p></article>
+          <article><span>03</span><strong>Clinical boundary</strong><p>MediKiosk does not diagnose or prescribe treatment.</p></article>
         </div>
+        <div className="consent-bilingual-copy">
+          <p lang="en">{CONSENT_PROMPTS.en}</p>
+          <p lang="hi">{CONSENT_PROMPTS.hi}</p>
+        </div>
+        <p className="live-caption" aria-live="polite">{voice.caption || "The explanation will play automatically in English and Hindi."}</p>
         <p className="prompt-status">The microphone remains off until you agree. / आपकी सहमति तक माइक्रोफ़ोन बंद रहेगा।</p>
         <div className="consent-actions">
-          <button className="start-button" type="button" onClick={onAgree} disabled={isSubmitting}>
-            {isSubmitting ? "Starting securely…" : "I agree, continue / मैं सहमत हूँ"}
-          </button>
+          <button className="start-button" type="button" onClick={onAgree} disabled={isSubmitting}>{isSubmitting ? "Starting securely…" : "I agree, continue / मैं सहमत हूँ"}</button>
           <button className="decline-button" type="button" onClick={onDecline}>I do not agree / मैं सहमत नहीं हूँ</button>
+          <button className="consent-listen-button" type="button" onClick={() => void voice.speak(CONSENT_PROMPTS.en, "en")} disabled={voice.state === "speaking"}>Replay English</button>
+          <button className="consent-listen-button" type="button" onClick={() => void voice.speak(CONSENT_PROMPTS.hi, "hi")} disabled={voice.state === "speaking"}>हिन्दी दोहराएँ</button>
         </div>
-        {actionError && <p className="language-error" role="alert">{actionError}</p>}
+        {(actionError || voice.error) && <p className="language-error" role="alert">{actionError || voice.error}</p>}
         <ClearDataButton language="en" onClearData={onClearData} />
       </section>
     </main>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { apiFetch } from "./api";
+import { apiFetch, KIOSK_ID } from "./api";
 
 function DeviceDiagnostics({ onBack }) {
   const [results, setResults] = useState({ touch: "waiting", network: "waiting", microphone: "waiting", camera: "waiting", speaker: "waiting" });
@@ -57,6 +57,8 @@ function DeviceDiagnostics({ onBack }) {
       <section className="start-card diagnostics-card">
         <p className="start-eyebrow">MediKiosk · Device check</p><h1>Commission this kiosk</h1>
         <p className="start-copy">Run these checks on the installed kiosk before patients use it.</p>
+        {/* Operationally useful for staff/audit (which physical machine this is) - never shown on patient-facing screens. */}
+        <p className="kiosk-identity-note">Kiosk ID: {KIOSK_ID}</p>
         <div className="diagnostic-list">
           <button type="button" className="diagnostic-test" onPointerDown={() => setResult("touch", "passed")}><strong>Touchscreen</strong><span>Touch and hold here</span><em>{label(results.touch)}</em></button>
           <button type="button" className="diagnostic-test" onClick={testNetwork}><strong>Backend connection</strong><span>Check the kiosk service</span><em>{label(results.network)}</em></button>

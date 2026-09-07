@@ -13,8 +13,14 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
+_BUNDLED_DEVANAGARI_FONT = Path(__file__).resolve().parent / "fonts" / "NotoSansDevanagari-Regular.ttf"
+
+
 def _font_name() -> str:
-    for path in (Path("C:/Windows/Fonts/Nirmala.ttf"), Path("C:/Windows/Fonts/arial.ttf")):
+    # Bundle a Devanagari-capable font rather than depending on whatever the
+    # host kiosk happens to have installed (Windows' Nirmala.ttf may be
+    # missing on a machine without a Hindi language pack).
+    for path in (_BUNDLED_DEVANAGARI_FONT, Path("C:/Windows/Fonts/Nirmala.ttf"), Path("C:/Windows/Fonts/arial.ttf")):
         if path.exists():
             try:
                 pdfmetrics.registerFont(TTFont("MediKioskUnicode", str(path)))

@@ -36,10 +36,10 @@ const CORE_FIELDS = [
   ["drug_allergy_history.current_medications", "Current medications"],
   ["drug_allergy_history.allergies", "Allergies"],
   ["family_history", "Family history"],
-  ["personal_history.diet", "Diet"],
-  ["personal_history.smoking", "Tobacco use"],
-  ["personal_history.alcohol", "Alcohol use"],
-  ["personal_history.occupation", "Occupation"],
+  ["personal_history.diet", "Ahara-Vihara: Diet"],
+  ["personal_history.smoking", "Ahara-Vihara: Tobacco use"],
+  ["personal_history.alcohol", "Ahara-Vihara: Alcohol use"],
+  ["personal_history.occupation", "Ahara-Vihara: Occupation"],
   ["review_of_systems", "Other symptoms review"],
 ];
 const AYUSH_FIELDS = [
@@ -51,6 +51,15 @@ const AYUSH_FIELDS = [
   ["ayush_assessment.dashavidha.patient_reported.ahara_shakti", "Ahara Shakti"],
   ["ayush_assessment.dashavidha.patient_reported.vyayama_shakti", "Vyayama Shakti"],
   ["ayush_assessment.dashavidha.patient_reported.vaya", "Vaya"],
+];
+const TRIVIDHA_PARIKSHA_FIELDS = [["darshana", "Darshana"], ["sparshana", "Sparshana"], ["prashna", "Prashna"]];
+const ASHTAVIDHA_PARIKSHA_FIELDS = [
+  ["nadi", "Nadi"], ["mutra", "Mutra"], ["mala", "Mala"], ["jihva", "Jihva"],
+  ["shabda", "Shabda"], ["sparsha", "Sparsha"], ["drik", "Drik"], ["akriti", "Akriti"],
+];
+const DASHAVIDHA_EXAM_FIELDS = [
+  ["sara", "Sara"], ["samhanana", "Samhanana"], ["pramana", "Pramana"],
+  ...TRIVIDHA_PARIKSHA_FIELDS, ...ASHTAVIDHA_PARIKSHA_FIELDS,
 ];
 const AYURVEDA_OPTIONAL_CORE = new Set([
   "past_surgical_history", "family_history", "personal_history.diet", "personal_history.smoking",
@@ -151,7 +160,9 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   const [pushError, setPushError] = useState("");
   const [showBundle, setShowBundle] = useState(false);
   const [recentSessions, setRecentSessions] = useState([]);
-  const [ayushConfirmation, setAyushConfirmation] = useState({ prakriti: "", sara: "", samhanana: "", pramana: "", notes: "" });
+  const [ayushConfirmation, setAyushConfirmation] = useState(() => ({
+    prakriti: "", notes: "", ...Object.fromEntries(DASHAVIDHA_EXAM_FIELDS.map(([key]) => [key, ""])),
+  }));
   const [ayushSaveState, setAyushSaveState] = useState("idle");
   const [ayushSaveMessage, setAyushSaveMessage] = useState("");
   const [editValues, setEditValues] = useState({ chief_complaint: "", medications: "", allergies: "", past_medical_history: "", past_surgical_history: "" });
@@ -168,14 +179,13 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   useEffect(() => {
     setAyushConfirmation({
       prakriti: ayush.prakriti || "",
-      sara: practitionerDashavidha.sara || "",
-      samhanana: practitionerDashavidha.samhanana || "",
-      pramana: practitionerDashavidha.pramana || "",
       notes: practitionerDashavidha.notes || "",
+      ...Object.fromEntries(DASHAVIDHA_EXAM_FIELDS.map(([key]) => [key, practitionerDashavidha[key] || ""])),
     });
     setAyushSaveState("idle");
     setAyushSaveMessage("");
-  }, [sessionId, ayush.prakriti, practitionerDashavidha.sara, practitionerDashavidha.samhanana, practitionerDashavidha.pramana, practitionerDashavidha.notes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, ayush.prakriti, practitionerDashavidha.notes, ...DASHAVIDHA_EXAM_FIELDS.map(([key]) => practitionerDashavidha[key])]);
 
   useEffect(() => {
     setEditValues({
@@ -526,10 +536,10 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
             <div><dt>Past medical history</dt><dd><ListValue items={patient.past_medical_history} /></dd></div>
             <div><dt>Past surgical history</dt><dd><ListValue items={patient.past_surgical_history} /></dd></div>
             <div><dt>Family history</dt><dd><ListValue items={patient.family_history} /></dd></div>
-            <div><dt>Diet</dt><dd><SafeValue value={patient.personal_history?.diet} /></dd></div>
-            <div><dt>Tobacco / smoking</dt><dd><SafeValue value={patient.personal_history?.smoking == null ? null : patient.personal_history.smoking ? "Yes" : "No"} /></dd></div>
-            <div><dt>Alcohol</dt><dd><SafeValue value={patient.personal_history?.alcohol == null ? null : patient.personal_history.alcohol ? "Yes" : "No"} /></dd></div>
-            <div><dt>Occupation</dt><dd><SafeValue value={patient.personal_history?.occupation} /></dd></div>
+            <div><dt>Ahara-Vihara: Diet</dt><dd><SafeValue value={patient.personal_history?.diet} /></dd></div>
+            <div><dt>Ahara-Vihara: Tobacco / smoking</dt><dd><SafeValue value={patient.personal_history?.smoking == null ? null : patient.personal_history.smoking ? "Yes" : "No"} /></dd></div>
+            <div><dt>Ahara-Vihara: Alcohol</dt><dd><SafeValue value={patient.personal_history?.alcohol == null ? null : patient.personal_history.alcohol ? "Yes" : "No"} /></dd></div>
+            <div><dt>Ahara-Vihara: Occupation</dt><dd><SafeValue value={patient.personal_history?.occupation} /></dd></div>
             <div><dt>Other symptoms review</dt><dd><SafeValue value={patient.review_of_systems} /></dd></div>
           </dl>
         </section>
@@ -563,6 +573,14 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
               <label>Sara<input value={ayushConfirmation.sara} onChange={(event) => setAyushConfirmation((current) => ({ ...current, sara: event.target.value }))} /></label>
               <label>Samhanana<input value={ayushConfirmation.samhanana} onChange={(event) => setAyushConfirmation((current) => ({ ...current, samhanana: event.target.value }))} /></label>
               <label>Pramana<input value={ayushConfirmation.pramana} onChange={(event) => setAyushConfirmation((current) => ({ ...current, pramana: event.target.value }))} /></label>
+              <p className="section-kicker">Trividha Pariksha</p>
+              {TRIVIDHA_PARIKSHA_FIELDS.map(([key, label]) => (
+                <label key={key}>{label}<input value={ayushConfirmation[key]} onChange={(event) => setAyushConfirmation((current) => ({ ...current, [key]: event.target.value }))} /></label>
+              ))}
+              <p className="section-kicker">Ashtavidha Pariksha</p>
+              {ASHTAVIDHA_PARIKSHA_FIELDS.map(([key, label]) => (
+                <label key={key}>{label}<input value={ayushConfirmation[key]} onChange={(event) => setAyushConfirmation((current) => ({ ...current, [key]: event.target.value }))} /></label>
+              ))}
               <label className="ayush-notes-field">Examination notes<textarea value={ayushConfirmation.notes} onChange={(event) => setAyushConfirmation((current) => ({ ...current, notes: event.target.value }))} rows="3" /></label>
               <button className="play-summary-button" type="submit" disabled={ayushSaveState === "saving" || !ayushConfirmation.prakriti.trim()}>{ayushSaveState === "saving" ? "Saving..." : "Save practitioner confirmation"}</button>
               {ayushSaveMessage && <p className={ayushSaveState === "error" ? "speech-error" : "abdm-push-status"} role={ayushSaveState === "error" ? "alert" : undefined}>{ayushSaveMessage}</p>}

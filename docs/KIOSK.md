@@ -21,10 +21,20 @@ These are genuine OS-level changes and are left as manual, conscious steps for w
 - **Disable sleep / screen lock while the kiosk is in use** — Windows Settings → System → Power & battery → Screen and sleep, set both to "Never" (or use `powercfg`), on the specific machine that will run as the physical kiosk. Don't do this on a shared/personal dev machine.
 - **Disable the Windows key and Alt+Tab** so a patient can't switch away to the desktop — needs either Group Policy (`gpedit.msc`, not available on Home editions) or a dedicated kiosk-lockdown tool; out of scope for a hackathon prototype but a real pre-deployment step.
 - **Auto-login + auto-launch on boot** — set the machine to auto-login to a dedicated kiosk user account, with `kiosk-mode.bat` in that user's Startup folder, so the kiosk comes back up on its own after a power cycle.
-- **Auto-restart the dev servers if they crash** — the current setup is hackathon-simple (`--reload` uvicorn + `npm run dev`, not a production process manager). A real deployment would run the backend behind something like NSSM (a Windows service wrapper) or build the frontend (`npm run build`) and serve the static output, rather than running Vite's dev server continuously.
+- **Auto-restart the dev servers if they crash** — the current setup is hackathon-simple (`run_server.py` + `npm run dev`, not a production process manager). A real deployment would run the backend behind something like NSSM (a Windows service wrapper) or build the frontend (`npm run build`) and serve the static output, rather than running Vite's dev server continuously.
 
 ## App-level kiosk hardening (already built in)
 - Right-click / context menu is disabled app-wide (`main.jsx`) - no "Inspect"/"View source" escape hatch.
 - Pinch-zoom and double-tap-zoom are disabled (`touch-action: manipulation` in `index.css`) so they don't fight with the app's own text-size control.
 - Text selection is disabled everywhere except the doctor dashboard's transcript/summary text and the FHIR bundle viewer, where a physician might actually want to copy something.
+
+## Current patient interaction
+
+- Consent plays automatically in English and Hindi. The microphone stays off until the patient agrees.
+- Language and Speak/Chat selection play their prompt and then start listening automatically; every spoken prompt is also shown as a caption.
+- Speak mode continues hands-free through patient identification, name and phone confirmation, optional ABHA choice, department confirmation, and the clinical interview. The orb shows speaking, listening, understanding, ready, and error states.
+- A patient can say “cancel and clear my data” or “switch to chat.” MediKiosk asks for a spoken yes/no confirmation before acting.
+- Finger-sized buttons and typed inputs remain available throughout. Repeated voice failures reveal the appropriate typed fallback.
+- Phone numbers display as `XXXXX-XXXXX`. Medi IDs keep their `MK-XXXXXX` format.
+- The display toolbar provides text size, light/dark mode, high contrast, repeat, and staff help. Text size changes fonts without browser zoom, so patient screens remain inside the kiosk viewport.
 - The app already has its own idle timeout that clears session data and returns to the start screen (see ROADMAP.md) - this is the intended way a kiosk resets between patients, not an OS-level timeout.

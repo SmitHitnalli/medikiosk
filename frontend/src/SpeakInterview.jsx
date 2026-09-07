@@ -1,6 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
 import VoiceOrb from "./VoiceOrb";
+
+// Local model inference can take several seconds; past this threshold the
+// orb switches to a "still working" cue so a patient staring at silence
+// doesn't think the kiosk has frozen.
+const STILL_WORKING_DELAY_MS = 3500;
 
 function SpeakInterview({
   language,
@@ -31,17 +36,28 @@ function SpeakInterview({
   const pendingReadBack = interviewComplete && readBackSummary && !readBackConfirmed;
   const isHindi = language === "hi";
   const [showManualInput, setShowManualInput] = useState(false);
+  const [stillWorking, setStillWorking] = useState(false);
+  useEffect(() => {
+    if (!isSending) {
+      setStillWorking(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setStillWorking(true), STILL_WORKING_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [isSending]);
   const latestAssistant = [...messages].reverse().find((entry) => entry.role === "assistant")?.content || "";
   const orbState = isRecording ? "listening" : isSending ? "thinking" : isSpeaking ? "speaking" : interviewComplete ? "paused" : "ready";
   const orbLabel = isRecording
     ? (isHindi ? "सुन रहा है" : "Listening")
     : isSending
-      ? (isHindi ? "समझ रहा है" : "Thinking")
+      ? (stillWorking
+          ? (isHindi ? "अभी भी समझ रहा है…" : "Still thinking…")
+          : (isHindi ? "समझ रहा है" : "Thinking"))
       : isSpeaking
         ? (isHindi ? "बोल रहा है" : "Speaking")
         : interviewComplete
           ? (isHindi ? "पूरा हुआ" : "Complete")
-          : (isHindi ? "बोलने के लिए छुएँ" : "Tap to speak");
+          : (isHindi ? "आपका जवाब सुनने के लिए तैयार" : "Ready for your answer");
 
   return (
     <main className="speak-interview-shell">
@@ -65,11 +81,12 @@ function SpeakInterview({
       ))}
 
       <section className="speak-orb-stage" aria-label="Voice interview">
-        <button className="orb-touch-target" type="button" onClick={onToggleRecording} disabled={isSending || interviewComplete} aria-label={isRecording ? "Stop listening" : "Start listening"}>
+        <button className="orb-touch-target" type="button" onClick={onToggleRecording} disabled={isSending || (interviewComplete && !pendingReadBack)} aria-label={isRecording ? "Stop listening" : "Start listening"}>
           <VoiceOrb state={orbState} label={orbLabel} />
         </button>
         <p className="spoken-caption" aria-live="polite">{latestAssistant}</p>
         {isRecording && <p className="recording-status"><span className="recording-dot" /> {isHindi ? "सुन रहे हैं… बोलना पूरा होने पर रुकें" : "Listening… stop when you have finished"}</p>}
+        {isSending && stillWorking && <p className="still-working-note" aria-live="polite">{isHindi ? "बस थोड़ा और समय लगेगा…" : "Still working, this can take a few more seconds…"}</p>}
         {pendingReadBack && (
           <div className="read-back-actions speak-read-back-actions">
             <button type="button" onClick={onConfirmReadBack}>{isHindi ? "हाँ, सही है" : "Yes, that's correct"}</button>
@@ -82,7 +99,7 @@ function SpeakInterview({
       </section>
 
       <nav className="speak-controls" aria-label="Voice interview controls">
-        <button type="button" onClick={onToggleRecording} disabled={isSending || interviewComplete}>{isRecording ? (isHindi ? "रोकें" : "Stop") : (isHindi ? "बोलें" : "Speak")}</button>
+        <button type="button" onClick={onToggleRecording} disabled={isSending || (interviewComplete && !pendingReadBack)}>{isRecording ? (isHindi ? "रोकें" : "Stop") : (isHindi ? "अभी बोलें" : "Speak now")}</button>
         <button type="button" onClick={() => setShowManualInput((value) => !value)}>{isHindi ? "टाइप करें" : "Type answer"}</button>
         <button type="button" onClick={onSwitchToChat}>{isHindi ? "चैट पर जाएँ" : "Switch to Chat"}</button>
         {interviewComplete && !pendingReadBack && <button type="button" onClick={onDashboard}>{isHindi ? "डॉक्टर सारांश" : "Doctor summary"}</button>}
@@ -90,8 +107,8 @@ function SpeakInterview({
 
       {showManualInput && (
         <form className="speak-manual-form" onSubmit={(event) => { event.preventDefault(); onSend(message); }}>
-          <input value={message} onChange={(event) => onMessageChange(event.target.value)} placeholder={isHindi ? "अपना जवाब टाइप करें" : "Type your answer"} maxLength={4000} disabled={isSending || interviewComplete} />
-          <button type="submit" disabled={!message.trim() || isSending || interviewComplete}>{isHindi ? "भेजें" : "Send"}</button>
+          <input value={message} onChange={(event) => onMessageChange(event.target.value)} placeholder={isHindi ? "अपना जवाब टाइप करें" : "Type your answer"} maxLength={4000} disabled={isSending || (interviewComplete && !pendingReadBack)} />
+          <button type="submit" disabled={!message.trim() || isSending || (interviewComplete && !pendingReadBack)}>{isHindi ? "भेजें" : "Send"}</button>
         </form>
       )}
 

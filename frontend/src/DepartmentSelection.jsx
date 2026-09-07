@@ -1,94 +1,65 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
-import { playAudioBlob, stopAllAudio } from "./audio";
-import { apiFetch } from "./api";
 import VoiceOrb from "./VoiceOrb";
-const DEPARTMENT_PROMPTS = {
-  en: "Which department are you visiting today?",
-  hi: "आप आज किस विभाग में आए हैं?",
-};
-const DEPARTMENTS = [
-  ["Kayachikitsa", "कायचिकित्सा", "Kayachikitsa"],
-  ["Panchakarma", "पंचकर्म", "Panchakarma"],
-  ["Shalya", "शल्य", "Shalya"],
-  ["Prasuti Tantra", "प्रसूति तंत्र", "Prasuti Tantra"],
-  ["Not sure / General consultation", "निश्चित नहीं / सामान्य परामर्श", "general"],
-];
+import { isCancelCommand, normaliseVoiceText, useVoiceFlow, voiceYesNo } from "./voiceFlow";
 
-function playHindiPlaceholder(text) {
-  if (!window.speechSynthesis) return Promise.reject(new Error("Hindi voice fallback is unavailable."));
-  return new Promise((resolve) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "hi-IN";
-    utterance.onend = resolve;
-    utterance.onerror = resolve;
-    window.speechSynthesis.speak(utterance);
-  });
-}
+const DEPARTMENTS = [
+  { en:"Kayachikitsa", hi:"कायचिकित्सा", value:"Kayachikitsa", words:["kayachikitsa","kaya chikitsa","कायचिकित्सा"] },
+  { en:"Panchakarma", hi:"पंचकर्म", value:"Panchakarma", words:["panchakarma","panch karma","पंचकर्म"] },
+  { en:"Shalya", hi:"शल्य", value:"Shalya", words:["shalya","surgery","शल्य"] },
+  { en:"Prasuti Tantra", hi:"प्रसूति तंत्र", value:"Prasuti Tantra", words:["prasuti","prasoothi","pregnancy","women","प्रसूति"] },
+  { en:"General consultation", hi:"सामान्य परामर्श", value:"general", words:["general","not sure","don't know","dont know","सामान्य","पता नहीं"] },
+];
+const PROMPTS = { en:"Which department are you visiting? Say Kayachikitsa, Panchakarma, Shalya, Prasuti Tantra, or General if you are not sure.", hi:"आप किस विभाग में आए हैं? कायचिकित्सा, पंचकर्म, शल्य, प्रसूति तंत्र, या निश्चित न होने पर सामान्य कहें।" };
 
 function DepartmentSelection({ language, interactionMode, onSelect, onBack, onClearData }) {
-  const isSpeakMode = interactionMode === "speak";
+  const isSpeak = interactionMode === "speak";
   const isHindi = language === "hi";
-  const prompt = DEPARTMENT_PROMPTS[language] || DEPARTMENT_PROMPTS.en;
-  const [promptStatus, setPromptStatus] = useState("");
+  const voice = useVoiceFlow(language);
+  const [candidate, setCandidate] = useState(null);
+  const startedRef = useRef(false);
 
-  useEffect(() => {
-    if (!isSpeakMode) return undefined;
-    let cancelled = false;
-    const controller = new AbortController();
-    async function speakPrompt() {
-      try {
-        const response = await apiFetch("/speak", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: prompt, language: language || "en" }),
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error("Department prompt unavailable");
-        if (!cancelled) {
-          const audioBlob = await response.blob();
-          if (language === "hi") {
-            // Prefer the real Hindi Piper voice; browser speechSynthesis is now
-            // only a last-resort fallback if Piper audio playback itself fails.
-            try { await playAudioBlob(audioBlob); } catch (playbackError) {
-              if (!cancelled && playbackError.message !== "Audio playback stopped.") await playHindiPlaceholder(prompt);
-            }
-          } else {
-            await playAudioBlob(audioBlob);
-          }
-        }
-      } catch (error) {
-        if (!cancelled && error.name !== "AbortError" && error.message !== "Audio playback stopped.") {
-          setPromptStatus("Please choose your department below.");
-        }
-      }
-    }
-    void speakPrompt();
-    return () => {
-      cancelled = true;
-      controller.abort();
-      stopAllAudio();
-    };
-  }, [isSpeakMode, language, prompt]);
+  const confirmCancel = useCallback(async () => {
+    const answer = await voice.promptAndListen(isHindi ? "क्या आप वाकई रद्द करके अपना डेटा मिटाना चाहते हैं?" : "Are you sure you want to cancel and clear your data?").catch(()=>"");
+    if (voiceYesNo(answer) === true) onClearData();
+    else if (voiceYesNo(answer) === false) await voice.speak(isHindi ? "ठीक है, विभाग चयन जारी रखें।" : "Okay, we will continue choosing a department.");
+  }, [isHindi, onClearData, voice.promptAndListen, voice.speak]);
 
-  return (
-    <main className="start-shell">
-      <section className="start-card department-card" aria-label="Department selection">
-        <div className="brand-mark small" aria-hidden="true">M</div>
-        <p className="start-eyebrow">MediKiosk · {isHindi ? "विभाग" : "Department"}</p>
-        {isSpeakMode && <VoiceOrb compact state="ready" label={isHindi ? "विभाग चुनें" : "Choose a department"} />}
-        <h1>{prompt}</h1>
-        {promptStatus && <p className="language-error" role="status">{promptStatus}</p>}
-        <div className="department-grid">
-          {DEPARTMENTS.map(([label, hindiLabel, value]) => (
-            <button className="department-button" type="button" key={value} onClick={() => onSelect(value)}>{isHindi ? hindiLabel : label}</button>
-          ))}
-        </div>
-        <button className="secondary-start-button" type="button" onClick={onBack}>{isHindi ? "रोगी की पहचान पर वापस जाएँ" : "Back to patient identification"}</button>
-        <ClearDataButton language={language} onClearData={onClearData} />
-      </section>
-    </main>
-  );
+  const hearDepartment = useCallback(async (answer) => {
+    if (isCancelCommand(answer)) return confirmCancel();
+    const text=normaliseVoiceText(answer);
+    const match=DEPARTMENTS.find((item)=>item.words.some((word)=>text.includes(word)));
+    if (!match) { voice.setError(isHindi ? "विभाग समझ नहीं आया। फिर से बोलें या स्क्रीन पर चुनें।" : "I did not recognise that department. Try again or tap a choice."); return; }
+    setCandidate(match);
+    const confirmation=await voice.promptAndListen(isHindi ? `आपने ${match.hi} चुना है। क्या यह सही है?` : `You selected ${match.en}. Is that correct?`).catch(()=>"");
+    if (isCancelCommand(confirmation)) return confirmCancel();
+    if (voiceYesNo(confirmation) === true) onSelect(match.value);
+    else if (voiceYesNo(confirmation) === false) { setCandidate(null); const retry=await voice.promptAndListen(PROMPTS[language] || PROMPTS.en).catch(()=>""); return hearDepartment(retry); }
+    else voice.setError(isHindi ? "हाँ या नहीं कहें, या स्क्रीन पर विभाग चुनें।" : "Please say yes or no, or choose the department on screen.");
+  }, [confirmCancel, isHindi, language, onSelect, voice.promptAndListen, voice.setError]);
+
+  useEffect(()=>{
+    if (!isSpeak || startedRef.current) return;
+    startedRef.current=true;
+    void voice.promptAndListen(PROMPTS[language] || PROMPTS.en, { timeoutMs:8000 }).then(hearDepartment).catch(()=>{});
+  },[hearDepartment,isSpeak,language,voice.promptAndListen]);
+
+  const chooseByTouch = async (item) => {
+    if (!isSpeak) return onSelect(item.value);
+    voice.cancel();
+    setCandidate(item);
+    const answer=await voice.promptAndListen(isHindi ? `आपने ${item.hi} चुना है। क्या यह सही है?` : `You selected ${item.en}. Is that correct?`).catch(()=>"");
+    if (voiceYesNo(answer) === true) onSelect(item.value);
+    else if (voiceYesNo(answer) === false) setCandidate(null);
+  };
+  const label=voice.state === "listening" ? (isHindi?"सुन रहा है":"Listening") : voice.state === "speaking" ? (isHindi?"बोल रहा है":"Speaking") : voice.state === "thinking" ? (isHindi?"समझ रहा है":"Understanding") : candidate ? (isHindi?"पुष्टि करें":"Confirm selection") : (isHindi?"विभाग चुनें":"Choose a department");
+  return <main className="start-shell voice-form-shell"><section className="start-card department-card" aria-label="Department selection">
+    <p className="start-eyebrow">MediKiosk · {isHindi?"विभाग":"Department"}</p>
+    {isSpeak && <VoiceOrb compact state={voice.state} label={label}/>}<h1>{isHindi?"आज आपको किस विभाग में जाना है?":"Which department do you need today?"}</h1>
+    <div className="department-grid">{DEPARTMENTS.map((item)=><button className={`department-button ${candidate?.value===item.value?"selected":""}`} key={item.value} onClick={()=>void chooseByTouch(item)}>{isHindi?item.hi:item.en}</button>)}</div>
+    {isSpeak && <p className="live-caption" aria-live="polite">{voice.caption}</p>}{voice.error&&<p className="language-error" role="alert">{voice.error}</p>}
+    {isSpeak&&<button className="voice-choice-button" onClick={()=>voice.state==="listening"?voice.stopListening():void voice.listen(language,8000).then(hearDepartment).catch(()=>{})}>{voice.state==="listening"?(isHindi?"सुनना बंद करें":"Stop listening"):(isHindi?"🎙 विभाग बोलें":"🎙 Say department")}</button>}
+    <button className="secondary-start-button" onClick={onBack}>{isHindi?"रोगी पहचान पर वापस":"Back to patient identification"}</button><ClearDataButton language={language} onClearData={onClearData}/>
+  </section></main>;
 }
-
 export default DepartmentSelection;

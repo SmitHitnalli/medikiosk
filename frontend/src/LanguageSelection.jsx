@@ -1,174 +1,65 @@
-import { useEffect, useRef, useState } from "react";
-import { playAudioBlob, stopAllAudio } from "./audio";
-
-import { apiFetch } from "./api";
+import { useCallback, useEffect, useRef } from "react";
+import { resetAccessibilityPreferences } from "./AccessibilityBar";
 import { OrbSelectionLayout } from "./VoiceOrb";
-const ENGLISH_PROMPT = "If you want to continue this conversation in English, say English or tap the English button below";
-const HINDI_PROMPT = "Agar aapko baat cheet Hindi mein karni hai to Hindi boliye ya neeche Hindi button dabaiye";
+import ClearDataButton from "./ClearDataButton";
+import { isCancelCommand, normaliseVoiceText, useVoiceFlow, voiceYesNo } from "./voiceFlow";
 
-async function requestSpeech(text, language, signal) {
-  const response = await apiFetch("/speak", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, language }),
-    signal,
-  });
-  if (!response.ok) throw new Error("Unable to play the language prompt.");
-  return response.blob();
-}
+const ENGLISH_PROMPT = "Choose your language. Say English for English, or Hindi for Hindi.";
+const HINDI_PROMPT = "अपनी भाषा चुनें। अंग्रेज़ी के लिए इंग्लिश या हिंदी के लिए हिंदी बोलें।";
 
-function playHindiPlaceholder(text) {
-  if (!window.speechSynthesis) return Promise.reject(new Error("Hindi voice fallback is unavailable."));
-  return new Promise((resolve) => {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "hi-IN";
-    utterance.onend = resolve;
-    utterance.onerror = resolve;
-    window.speechSynthesis.speak(utterance);
-  });
-}
+function LanguageSelection({ onSelect, onBack, onClearData }) {
+  const voice = useVoiceFlow("en");
+  const startedRef = useRef(false);
 
-function LanguageSelection({ onSelect, onBack }) {
-  const [promptStatus, setPromptStatus] = useState("Playing language prompts...");
-  const [isListening, setIsListening] = useState(false);
-  const [voiceError, setVoiceError] = useState("");
-  const recorderRef = useRef(null);
-  const streamRef = useRef(null);
-  const chunksRef = useRef([]);
-  const activeRef = useRef(true);
-  const transcriptionRef = useRef(null);
+  const confirmCancel = useCallback(async () => {
+    await voice.speak("Are you sure you want to cancel and clear your data? Say yes or no.", "en");
+    const answer = await voice.listen("en").catch(() => "");
+    if (voiceYesNo(answer) === true) onClearData();
+    else if (voiceYesNo(answer) === false) await voice.speak("Okay, we will continue.", "en");
+  }, [onClearData, voice.listen, voice.speak]);
+
+  const handleAnswer = useCallback((answer) => {
+    if (isCancelCommand(answer)) { void confirmCancel(); return; }
+    const text = normaliseVoiceText(answer);
+    if (text.includes("english") || text.includes("अंग्रेज")) onSelect("en");
+    else if (text.includes("hindi") || text.includes("हिंदी") || text.includes("हिन्दी")) onSelect("hi");
+    else {
+      voice.setError("Please say English or Hindi, or tap a language button.");
+      window.setTimeout(() => void voice.listen("en").then(handleAnswer).catch(() => {}), 600);
+    }
+  }, [confirmCancel, onSelect, voice.listen, voice.setError]);
 
   useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    async function playPrompts() {
-      try {
-        const englishAudio = await requestSpeech(ENGLISH_PROMPT, "en", controller.signal);
-        if (!cancelled) await playAudioBlob(englishAudio);
-      } catch {
-        if (!cancelled) setPromptStatus("Choose a language below; the spoken English prompt was unavailable.");
-      }
-      if (cancelled) return;
-      try {
-        const hindiAudio = await requestSpeech(HINDI_PROMPT, "hi", controller.signal);
-        if (!cancelled) {
-          // Prefer the real Hindi Piper voice; browser speechSynthesis is now only a
-          // last-resort fallback if Piper audio playback itself fails.
-          try {
-            await playAudioBlob(hindiAudio);
-          } catch (playbackError) {
-            if (!cancelled && playbackError.message !== "Audio playback stopped.") await playHindiPlaceholder(HINDI_PROMPT);
-          }
-        }
-        if (!cancelled) setPromptStatus("Select English or Hindi, or use the voice button.");
-      } catch {
-        if (!cancelled) setPromptStatus("Select English or Hindi, or use the voice button.");
-      }
-    }
-    void playPrompts();
-    return () => {
-      cancelled = true;
-      controller.abort();
-      stopAllAudio();
-      window.speechSynthesis?.cancel();
-    };
-  }, []);
+    if (startedRef.current) return;
+    startedRef.current = true;
+    (async () => {
+      await voice.speak(ENGLISH_PROMPT, "en");
+      const answer = await voice.promptAndListen(HINDI_PROMPT, { spokenLanguage: "hi", listenLanguage: "en", timeoutMs: 7000 });
+      handleAnswer(answer);
+    })().catch(() => {});
+  }, [handleAnswer, voice.promptAndListen, voice.speak]);
 
-  useEffect(() => {
-    activeRef.current = true;
-    return () => {
-      activeRef.current = false;
-      transcriptionRef.current?.abort();
-      if (recorderRef.current && recorderRef.current.state !== "inactive") {
-        recorderRef.current.onstop = null;
-        recorderRef.current.stop();
-      }
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-    };
-  }, []);
-
-  function stopListening() {
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") recorder.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    setIsListening(false);
-  }
-
-  async function handleRecording(blob) {
-    const controller = new AbortController();
-    transcriptionRef.current?.abort();
-    transcriptionRef.current = controller;
-    try {
-      const formData = new FormData();
-      formData.append("file", blob, "language-choice.webm");
-      formData.append("provider", "local");
-      const response = await apiFetch("/transcribe", { method: "POST", body: formData, signal: controller.signal });
-      const result = await response.json();
-      if (!activeRef.current || controller.signal.aborted) return;
-      if (!response.ok) throw new Error(result.detail || "Voice selection failed.");
-      const transcript = result.text?.toLowerCase() || "";
-      if (transcript.includes("english") || transcript.includes("अंग्रेज")) onSelect("en");
-      else if (transcript.includes("hindi") || transcript.includes("हिंदी") || transcript.includes("हिन्दी")) onSelect("hi");
-      else setVoiceError("Please say English or Hindi, then try again.");
-    } catch (error) {
-      if (activeRef.current && !controller.signal.aborted) setVoiceError(error.message || "Unable to understand the language choice.");
-    } finally {
-      if (transcriptionRef.current === controller) transcriptionRef.current = null;
-    }
-  }
-
-  async function startListening() {
-    if (isListening) return;
-    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-      setVoiceError("Voice selection is not supported in this browser.");
-      return;
-    }
-    try {
-      stopAllAudio();
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!activeRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      const options = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? { mimeType: "audio/webm;codecs=opus" } : {};
-      const recorder = new MediaRecorder(stream, options);
-      chunksRef.current = [];
-      streamRef.current = stream;
-      recorderRef.current = recorder;
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
-        chunksRef.current = [];
-        if (blob.size > 0) void handleRecording(blob);
-      };
-      recorder.start();
-      setVoiceError("");
-      setIsListening(true);
-    } catch (error) {
-      setVoiceError(error.name === "NotAllowedError" ? "Microphone permission is required." : "Unable to access the microphone.");
-    }
-  }
-
+  const label = voice.state === "speaking" ? "Speaking · बोल रहा है" : voice.state === "listening" ? "Listening · सुन रहा है" : voice.state === "thinking" ? "Understanding" : "Choose a language";
   return (
-    <OrbSelectionLayout state={isListening ? "listening" : "ready"} label={isListening ? "Listening" : "Choose a language"}>
+    <OrbSelectionLayout state={voice.state} label={label} caption={voice.caption}>
       <section className="start-card language-selection-card orb-popup-card" aria-label="Language selection">
-        <div className="brand-mark small" aria-hidden="true">M</div>
+        <p className="step-indicator">Step 1 of 2</p>
         <p className="start-eyebrow">MediKiosk</p>
         <h1>Choose your language</h1>
-        <p className="start-copy">{promptStatus}</p>
+        <p className="hindi-heading">अपनी भाषा चुनें</p>
+        <p className="start-copy">The prompt plays automatically. After it finishes, simply say your choice.</p>
         <div className="language-buttons">
           <button className="language-button" type="button" onClick={() => onSelect("en")}>English</button>
           <button className="language-button" type="button" onClick={() => onSelect("hi")}>हिन्दी <span>Hindi</span></button>
         </div>
-        <button className={`voice-choice-button ${isListening ? "listening" : ""}`} type="button" onClick={isListening ? stopListening : startListening}>
-          {isListening ? "Stop listening" : "🎙 Choose by voice"}
-        </button>
-        {isListening && <p className="recording-status language-recording"><span className="recording-dot" /> Say “English” or “Hindi”</p>}
-        {voiceError && <p className="language-error" role="alert">{voiceError}</p>}
-        <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
+        <p className="live-caption" aria-live="polite">{voice.caption}</p>
+        {voice.error && <p className="language-error" role="alert">{voice.error}</p>}
+        <div className="compact-actions">
+          <button className="voice-choice-button" type="button" onClick={() => voice.state === "listening" ? voice.stopListening() : void voice.listen("en").then(handleAnswer).catch(() => {})}>{voice.state === "listening" ? "Stop listening" : "🎙 Listen again"}</button>
+          <button className="secondary-start-button" type="button" onClick={resetAccessibilityPreferences}>Reset display</button>
+          <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
+        </div>
+        <ClearDataButton language="en" onClearData={onClearData} />
       </section>
     </OrbSelectionLayout>
   );
