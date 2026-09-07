@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from starlette.background import BackgroundTask
@@ -30,6 +30,9 @@ from starlette.responses import Response
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from PIL import Image
+
+OCR_MAX_IMAGE_PIXELS = 60_000_000  # ~60MP: generous for real photos, rejects decompression-bomb headers
+Image.MAX_IMAGE_PIXELS = OCR_MAX_IMAGE_PIXELS
 from clinical_pdf import build_clinical_pdf
 from abdm_integration import AbdmClient, AbdmConfigurationError, AbdmTransportError, validate_document_bundle
 from speech_providers import (
@@ -74,6 +77,7 @@ ALLOWED_ORIGINS = [item.strip() for item in os.environ.get(
     "MEDIKIOSK_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
 ).split(",") if item.strip()]
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+SESSION_COOKIE_NAME = "medikiosk_session_token"
 MAX_CHAT_CHARS = 4000
 MAX_SPEAK_CHARS = 3000
 ALLOWED_DEPARTMENTS = {"general", "Kayachikitsa", "Panchakarma", "Shalya", "Prasuti Tantra"}
@@ -1002,7 +1006,7 @@ def _require_session(session_id: str, token: str | None) -> sqlite3.Row:
 
 def _session_headers(
     x_session_id: str | None = Header(default=None),
-    x_session_token: str | None = Header(default=None),
+    x_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
 ) -> sqlite3.Row:
     if not x_session_id:
         raise HTTPException(status_code=401, detail="Patient session ID required")
@@ -1010,7 +1014,11 @@ def _session_headers(
 
 
 @app.post("/sessions/start")
-def start_session(request: SessionStartRequest, x_kiosk_id: str | None = Header(default=None)) -> dict:
+def start_session(
+    request: SessionStartRequest,
+    response: Response,
+    x_kiosk_id: str | None = Header(default=None),
+) -> dict:
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc).isoformat()
     language = request.language or ""
@@ -1057,14 +1065,22 @@ def start_session(request: SessionStartRequest, x_kiosk_id: str | None = Header(
         session_id=request.session_id,
         details={"scope": consent["scope"], "kiosk_id": _safe_kiosk_id(x_kiosk_id)},
     )
-    return {"session_id": request.session_id, "session_token": token}
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=bool(os.environ.get("TLS_CERT_FILE") and os.environ.get("TLS_KEY_FILE")),
+        samesite="strict",
+        path="/",
+    )
+    return {"session_id": request.session_id}
 
 
 @app.patch("/sessions/{session_id}/preferences")
 def set_session_preferences(
     session_id: str,
     request: SessionPreferencesRequest,
-    x_session_token: str | None = Header(default=None),
+    x_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
 ) -> dict:
     row = _require_session(session_id, x_session_token)
     data = ClinicalData.model_validate(_json_load(row["clinical_data"], {})).model_dump()
@@ -1091,7 +1107,11 @@ def set_session_preferences(
 
 
 @app.delete("/sessions/{session_id}")
-def clear_session(session_id: str, x_session_token: str | None = Header(default=None)) -> dict:
+def clear_session(
+    session_id: str,
+    response: Response,
+    x_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+) -> dict:
     session = _require_session(session_id, x_session_token)
     with _connect() as connection:
         connection.execute("DELETE FROM nurse_alerts WHERE session_id = ?", (session_id,))
@@ -1105,11 +1125,12 @@ def clear_session(session_id: str, x_session_token: str | None = Header(default=
         session_id=session_id,
         patient_medi_id=session["patient_medi_id"],
     )
+    response.delete_cookie(key=SESSION_COOKIE_NAME, path="/")
     return {"cleared": True, "patient_registry_retained": True}
 
 
 @app.get("/sessions/{session_id}")
-def get_patient_session(session_id: str, x_session_token: str | None = Header(default=None)) -> dict:
+def get_patient_session(session_id: str, x_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME)) -> dict:
     row = _require_session(session_id, x_session_token)
     data = ClinicalData.model_validate(_json_load(row["clinical_data"], {})).model_dump()
     return {
@@ -1131,7 +1152,7 @@ def get_patient_session(session_id: str, x_session_token: str | None = Header(de
 def set_session_department(
     session_id: str,
     request: SessionDepartmentRequest,
-    x_session_token: str | None = Header(default=None),
+    x_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
 ) -> dict:
     _require_session(session_id, x_session_token)
     with _connect() as connection:
@@ -1154,7 +1175,7 @@ def set_session_department(
 def set_session_documents(
     session_id: str,
     request: SessionDocumentsRequest,
-    x_session_token: str | None = Header(default=None),
+    x_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
 ) -> dict:
     row = _require_session(session_id, x_session_token)
     documents = _validate_documents(request.documents)
@@ -1225,7 +1246,15 @@ def register_patient(request: PatientRegistration, session: sqlite3.Row = Depend
 
 @app.get("/patients/{medi_id}")
 def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) -> dict[str, str | None]:
-    if int(session["lookup_failures"] or 0) >= 3:
+    now_epoch = time.time()
+    with _connect() as connection:
+        connection.execute("DELETE FROM security_attempts WHERE occurred_at < ?", (now_epoch - 300,))
+        recent_failures = connection.execute(
+            "SELECT COUNT(*) FROM security_attempts WHERE scope = 'medi_id_lookup' AND subject_key = ? AND occurred_at >= ?",
+            (medi_id, now_epoch - 300),
+        ).fetchone()[0]
+        connection.commit()
+    if recent_failures >= 3:
         raise HTTPException(status_code=429, detail="Medi ID lookup is locked for this visit. Please ask staff for help or continue as a new patient.")
     with _connect() as connection:
         row = connection.execute(
@@ -1237,8 +1266,8 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
     if row is None:
         with _connect() as connection:
             connection.execute(
-                "UPDATE sessions SET lookup_failures = lookup_failures + 1, updated_at = ? WHERE session_id = ?",
-                (datetime.now(timezone.utc).isoformat(), session["session_id"]),
+                "INSERT INTO security_attempts (scope, subject_key, occurred_at) VALUES ('medi_id_lookup', ?, ?)",
+                (medi_id, now_epoch),
             )
             connection.commit()
         _write_audit_event(
@@ -1256,7 +1285,11 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
     data["patient_id"] = row["medi_id"]
     with _connect() as connection:
         connection.execute(
-            "UPDATE sessions SET patient_medi_id = ?, patient_name = ?, clinical_data = ?, lookup_failures = 0, updated_at = ? WHERE session_id = ?",
+            "DELETE FROM security_attempts WHERE scope = 'medi_id_lookup' AND subject_key = ?",
+            (medi_id,),
+        )
+        connection.execute(
+            "UPDATE sessions SET patient_medi_id = ?, patient_name = ?, clinical_data = ?, updated_at = ? WHERE session_id = ?",
             (row["medi_id"], row["name"], json.dumps(data), datetime.now(timezone.utc).isoformat(), session["session_id"]),
         )
         connection.commit()
@@ -1502,7 +1535,13 @@ def _process_ocr(image_data: bytes, suffix: str, doc_type_hint: str | None, docu
 
         try:
             with Image.open(temp_path) as image:
+                if image.width * image.height > OCR_MAX_IMAGE_PIXELS:
+                    raise HTTPException(status_code=413, detail="The image dimensions are too large to process")
                 image.verify()
+        except HTTPException:
+            raise
+        except Image.DecompressionBombError as exc:
+            raise HTTPException(status_code=413, detail="The image dimensions are too large to process") from exc
         except Exception as exc:
             raise HTTPException(status_code=400, detail="The image file could not be decoded") from exc
 
@@ -2281,7 +2320,7 @@ def _patient_reply(
 
 
 @app.post("/chat")
-def chat(request: ChatRequest, x_session_token: str | None = Header(default=None)) -> dict:
+def chat(request: ChatRequest, x_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME)) -> dict:
     session_id = request.session_id
     session = _require_session(session_id, x_session_token)
     if not session["patient_medi_id"] or not session["department"]:
@@ -2670,7 +2709,7 @@ class HelpRequest(BaseModel):
 
 
 @app.post("/nurse-station/help-request")
-def request_help(request: HelpRequest, x_session_token: str | None = Header(default=None)) -> dict:
+def request_help(request: HelpRequest, x_session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME)) -> dict:
     # Patient-initiated call for staff assistance (the kiosk's "help" button, part
     # of the accessibility baseline) - reuses the same alert feed and acknowledge
     # flow as red-flag alerts rather than standing up a separate notification path.

@@ -35,7 +35,7 @@ function greeting(language) {
 function readStoredSession() {
   try {
     const value = JSON.parse(window.sessionStorage.getItem(SESSION_STORAGE_KEY) || "null");
-    return value && typeof value.sessionId === "string" && typeof value.sessionToken === "string" ? value : null;
+    return value && typeof value.sessionId === "string" && value.sessionToken === true ? value : null;
   } catch {
     return null;
   }
@@ -311,7 +311,9 @@ function App() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || "Could not start the visit.");
       setSessionId(result.session_id);
-      setSessionToken(result.session_token);
+      // The real token is set by the backend as an HttpOnly cookie and never
+      // reaches JS; this flag only tracks that a session is active.
+      setSessionToken(true);
       navigate("language");
     } catch (startError) {
       setError(startError.message || "Unable to start a secure visit.");

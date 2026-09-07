@@ -15,6 +15,7 @@ export async function apiFetch(path, options = {}, timeoutMs = 65000) {
     return await fetch(`${API_BASE}${path}`, {
       ...options,
       headers: { ...(options.headers || {}), "X-Kiosk-ID": KIOSK_ID },
+      credentials: "include",
       signal: controller.signal,
     });
   } finally {
@@ -23,11 +24,11 @@ export async function apiFetch(path, options = {}, timeoutMs = 65000) {
   }
 }
 
-export function patientHeaders(sessionId, sessionToken, json = false) {
-  const headers = {
-    "X-Session-Id": sessionId,
-    "X-Session-Token": sessionToken,
-  };
+// The patient session token now lives only in an HttpOnly cookie set by
+// /sessions/start and sent automatically by the browser (see apiFetch's
+// credentials: "include"); it is never available to read from JS.
+export function patientHeaders(sessionId, _sessionActive, json = false) {
+  const headers = { "X-Session-Id": sessionId };
   if (json) headers["Content-Type"] = "application/json";
   return headers;
 }

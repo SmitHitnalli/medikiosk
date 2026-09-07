@@ -6,6 +6,7 @@ The test-owned visit, alerts, export, and registry record are removed in finally
 
 from __future__ import annotations
 
+import http.cookies
 import io
 import json
 import math
@@ -54,6 +55,19 @@ def request_json(method, path, body=None, headers=None):
         return status, None
 
 
+def session_cookie_header(response_headers):
+    """The patient session token now arrives only as an HttpOnly Set-Cookie
+    header (never in the JSON body); forward it as a Cookie header on later
+    requests the way a browser would."""
+    raw_cookie = response_headers.get("Set-Cookie")
+    if not raw_cookie:
+        return None
+    jar = http.cookies.SimpleCookie()
+    jar.load(raw_cookie)
+    morsel = jar.get("medikiosk_session_token")
+    return f"medikiosk_session_token={morsel.value}" if morsel else None
+
+
 def record(name, passed, detail=""):
     results.append((name, bool(passed), detail))
     print(f"[{'PASS' if passed else 'FAIL'}] {name}" + (f" - {detail}" if detail else ""))
@@ -99,7 +113,7 @@ def main():
     suffix = uuid.uuid4().hex[:10]
     session_id = f"SMOKETEST-{suffix}"
     phone = "8" + str(time.time_ns())[-9:]
-    session_token = None
+    session_cookie = None
     medi_id = None
     staff_token = None
 
@@ -115,12 +129,12 @@ def main():
         status, _ = request_json("GET", "/staff/sessions")
         record("Staff API rejects anonymous access", status == 401, f"status={status}")
 
-        status, started = request_json("POST", "/sessions/start", {
+        status, raw_started, start_headers = request("POST", "/sessions/start", {
             "session_id": session_id, "consent": True,
         })
-        session_token = started.get("session_token") if started else None
-        patient_headers = {"X-Session-Id": session_id, "X-Session-Token": session_token} if session_token else {}
-        record("Consent-backed patient session", status == 200 and bool(session_token), f"status={status}")
+        session_cookie = session_cookie_header(start_headers)
+        patient_headers = {"X-Session-Id": session_id, "Cookie": session_cookie} if session_cookie else {}
+        record("Consent-backed patient session", status == 200 and bool(session_cookie), f"status={status}")
 
         status, _ = request_json(
             "PATCH", f"/sessions/{session_id}/preferences",
@@ -172,8 +186,8 @@ def main():
     except Exception as exc:
         record("Smoke runner", False, f"{type(exc).__name__}: {exc}")
     finally:
-        if session_token:
-            status, _ = request_json("DELETE", f"/sessions/{session_id}", headers={"X-Session-Token": session_token})
+        if session_cookie:
+            status, _ = request_json("DELETE", f"/sessions/{session_id}", headers={"Cookie": session_cookie})
             record("Test visit cleanup", status in {200, 401, 404}, f"status={status}")
         if medi_id and DATABASE_PATH.exists():
             try:

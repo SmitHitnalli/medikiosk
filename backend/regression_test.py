@@ -7,9 +7,11 @@ after every code change.
 
 import json
 import os
+import struct
 import tempfile
 import unittest
 import uuid
+import zlib
 from unittest.mock import patch
 
 _temp_dir = tempfile.TemporaryDirectory(prefix="medikiosk-regression-")
@@ -44,14 +46,17 @@ class MediKioskRegressionTests(unittest.TestCase):
             connection.commit()
 
     def start_session(self, language="en", mode="chat"):
+        # The session token is now set as an HttpOnly cookie (never in the JSON
+        # body); TestClient's cookie jar carries it automatically on later
+        # requests made with this same self.client instance.
         session_id = f"audit-{uuid.uuid4().hex}"
         response = self.client.post(
             "/sessions/start",
             json={"session_id": session_id, "language": language, "interaction_mode": mode, "consent": True},
         )
         self.assertEqual(response.status_code, 200, response.text)
-        token = response.json()["session_token"]
-        return session_id, token, {"X-Session-Id": session_id, "X-Session-Token": token}
+        self.assertNotIn("session_token", response.json())
+        return session_id, None, {"X-Session-Id": session_id}
 
     def active_session(self, department="general"):
         session_id, token, headers = self.start_session()
@@ -94,8 +99,7 @@ class MediKioskRegressionTests(unittest.TestCase):
         session_id = f"consent-{uuid.uuid4().hex}"
         response = self.client.post("/sessions/start", json={"session_id": session_id, "consent": True})
         self.assertEqual(response.status_code, 200, response.text)
-        token = response.json()["session_token"]
-        headers = {"X-Session-Token": token}
+        headers = {}
         record = self.client.get(f"/sessions/{session_id}", headers=headers).json()
         self.assertEqual(record["language"], "")
         self.assertEqual(record["interaction_mode"], "")
@@ -145,12 +149,17 @@ class MediKioskRegressionTests(unittest.TestCase):
         )
         self.assertIn(response.status_code, {400, 422})
 
-    def test_medi_id_lookup_locks_after_three_missing_ids(self):
+    def test_medi_id_lookup_locks_by_medi_id_and_survives_a_new_session(self):
         _, _, _, known_id = self.active_session()
         _, _, headers = self.start_session()
         for _ in range(3):
             self.assertEqual(self.client.get("/patients/MK-NOTREAL", headers=headers).status_code, 404)
-        self.assertEqual(self.client.get(f"/patients/{known_id}", headers=headers).status_code, 429)
+        self.assertEqual(self.client.get("/patients/MK-NOTREAL", headers=headers).status_code, 429)
+        # Starting over must not reset the lockout for that same Medi ID.
+        _, _, fresh_headers = self.start_session()
+        self.assertEqual(self.client.get("/patients/MK-NOTREAL", headers=fresh_headers).status_code, 429)
+        # A different, valid Medi ID is unaffected by another ID's lockout.
+        self.assertEqual(self.client.get(f"/patients/{known_id}", headers=fresh_headers).status_code, 200)
 
     def test_model_data_is_strictly_schema_validated(self):
         session_id, _, headers, _ = self.active_session()
@@ -502,13 +511,83 @@ class MediKioskRegressionTests(unittest.TestCase):
 
     def test_session_clear_removes_visit_but_retains_registry(self):
         session_id, token, headers, medi_id = self.active_session()
-        response = self.client.delete(
-            f"/sessions/{session_id}", headers={"X-Session-Token": token}
-        )
+        response = self.client.delete(f"/sessions/{session_id}")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(self.client.get(f"/sessions/{session_id}", headers=headers).status_code, 401)
         with main._connect() as connection:
             self.assertIsNotNone(connection.execute("SELECT 1 FROM patients WHERE medi_id = ?", (medi_id,)).fetchone())
+
+    def test_chat_transcript_preserves_script_payload_as_literal_text(self):
+        # DoctorDashboard.jsx renders transcript entries via {entry.content}, a
+        # JSX text expression that React escapes by default; no
+        # dangerouslySetInnerHTML exists anywhere in frontend/src. This confirms
+        # the backend stores/returns such payloads unmodified for that escaping
+        # to apply, rather than e.g. stripping or re-encoding them.
+        # Manual walkthrough: send this message in the demo UI, open the doctor
+        # dashboard transcript, confirm it renders as visible text with no
+        # alert() firing and no injected element.
+        session_id, _, headers, _ = self.active_session()
+        payload = "<script>alert(1)</script>"
+        valid = json.dumps({"reply": "Noted.", "interview_complete": False, "red_flag": False, "data": {}})
+        with patch.object(main, "_call_ollama", return_value=valid):
+            response = self.client.post("/chat", headers=headers, json={"session_id": session_id, "message": payload})
+        self.assertEqual(response.status_code, 200, response.text)
+        doctor = self.staff_headers()
+        record = self.client.get(f"/staff/sessions/{session_id}", headers=doctor).json()
+        self.assertTrue(any(entry.get("content") == payload for entry in record["transcript"]))
+
+    def test_ocr_rejects_decompression_bomb_dimensions(self):
+        def png_chunk(tag: bytes, data: bytes) -> bytes:
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
+
+        # A tiny file that declares an enormous pixel grid in its header -
+        # exactly the shape of a decompression-bomb upload. The IDAT payload is
+        # never actually decoded because the dimension check runs first.
+        ihdr = struct.pack(">IIBBBBB", 30000, 30000, 8, 2, 0, 0, 0)
+        bomb_png = (
+            b"\x89PNG\r\n\x1a\n"
+            + png_chunk(b"IHDR", ihdr)
+            + png_chunk(b"IDAT", zlib.compress(b"\x00\x00\x00"))
+            + png_chunk(b"IEND", b"")
+        )
+        response = self.client.post("/ocr", files={"file": ("bomb.png", bomb_png, "image/png")})
+        self.assertEqual(response.status_code, 413, response.text)
+
+    def test_transcribe_bytes_deletes_temp_file_after_success_and_failure(self):
+        seen_paths = []
+
+        class _Segment:
+            text = "hello"
+
+        class _SucceedingModel:
+            def transcribe(self, path):
+                seen_paths.append(path)
+                return [_Segment()], None
+
+        with patch.object(main, "_get_whisper_model", return_value=_SucceedingModel()):
+            text = main._transcribe_bytes(b"fake-audio-bytes", ".wav")
+        self.assertEqual(text, "hello")
+        self.assertFalse(os.path.exists(seen_paths[-1]))
+
+        class _FailingModel:
+            def transcribe(self, path):
+                seen_paths.append(path)
+                raise RuntimeError("boom")
+
+        with patch.object(main, "_get_whisper_model", return_value=_FailingModel()):
+            with self.assertRaises(RuntimeError):
+                main._transcribe_bytes(b"fake-audio-bytes", ".wav")
+        self.assertFalse(os.path.exists(seen_paths[-1]))
+
+    def test_prakriti_patch_endpoint_always_rejects_patient_writes(self):
+        session_id, _, headers, medi_id = self.active_session()
+        response = self.client.patch(f"/patients/{medi_id}/prakriti", headers=headers)
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertIn("practitioner", response.json()["detail"])
+        # An unlinked/mismatched Medi ID also gets a clear rejection, not a
+        # generic error, so the endpoint never silently no-ops.
+        response = self.client.patch("/patients/MK-OTHERX/prakriti", headers=headers)
+        self.assertEqual(response.status_code, 403, response.text)
 
 
 if __name__ == "__main__":
