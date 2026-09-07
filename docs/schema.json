@@ -89,11 +89,14 @@
   ],
   "red_flag": false,
   "red_flag_reason": "string",
+  "red_flag_category": "general | obstetric_emergency | anaphylaxis | mental_health_crisis",
   "consent": {
     "abha_id": "string",
     "consent_given_at": "string",
     "scope": ["history_capture", "document_sharing", "hospital_share"]
   },
   "status": "draft | physician_reviewed | saved_to_emr",
-  "interview_complete": false
+  "interview_complete": false,
+  "read_back_confirmed": false,
+  "read_back_disputed": false
 }

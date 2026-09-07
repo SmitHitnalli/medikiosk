@@ -59,6 +59,13 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .alert-icon { display: grid; flex: 0 0 24px; height: 24px; place-items: center; border-radius: 50%; color: white; background: #d83d35; font-weight: 700; }
 .red-alert strong { font-size: 14px; }
 .red-alert p { margin: 3px 0 0; font-size: 13px; }
+.calm-support-alert { margin: 18px 24px 0; padding: 14px 16px; border: 1px solid #b8d4e6; border-radius: 12px; color: #1d3f5e; background: #f0f6fb; }
+.calm-support-alert strong { font-size: 14px; }
+.calm-support-alert p { margin: 3px 0 0; font-size: 13px; }
+.read-back-actions { display: flex; gap: 10px; margin-top: 10px; }
+.read-back-actions button { min-height: 44px; padding: 0 16px; border-radius: 10px; font-weight: 700; }
+.read-back-dispute { color: #7e1d1d !important; border: 1px solid #f2a6a0 !important; background: #fff0ee !important; }
+.speak-read-back-actions { justify-content: center; margin-top: 14px; }
 .ocr-card { margin: 18px 24px 0; padding: 16px; border: 1px solid #d4e5de; border-radius: 13px; background: #f8fcf8; }
 .ocr-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }.ocr-card-heading h2 { margin: 0; color: #173b3c; font-family: "Space Grotesk", sans-serif; font-size: 17px; }
 .ocr-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 22px; }.ocr-fields dt { margin-bottom: 4px; color: #78908a; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }.ocr-fields dd { margin: 0; color: #284b48; font-size: 13px; line-height: 1.4; }.ocr-fields ul { margin: 0; padding-left: 18px; }.ocr-fields li + li { margin-top: 4px; }.ocr-labs { grid-column: 1 / -1; }
@@ -230,6 +237,7 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .spoken-caption { min-height: 48px; max-width: 680px; margin: 24px auto 0; color: #effff9; font-size: clamp(15px, 2vw, 19px); line-height: 1.5; }
 .speak-orb-stage .recording-status { margin: 12px 0 0; color: #ffd0cb; text-align: center; }
 .speak-red-alert { width: min(760px, calc(100% - 32px)); margin: 0 auto; }
+.speak-calm-alert { width: min(760px, calc(100% - 32px)); margin: 0 auto; }
 .speak-complete { color: #b9f0d5; font-weight: 700; }
 .speak-controls { padding: 14px 20px 20px; }
 .speak-controls button:first-child { min-width: 130px; color: #0d3b3b; border-color: #fff; background: #fff; }

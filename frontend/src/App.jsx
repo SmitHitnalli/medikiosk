@@ -64,6 +64,8 @@ function App() {
   const [page, setPage] = useState(STAFF_PAGES.has(initialHash) || initialHash === "diagnostics" ? initialHash : stored?.page || "idle");
   const [interviewData, setInterviewData] = useState(stored?.interviewData || null);
   const [interviewComplete, setInterviewComplete] = useState(Boolean(stored?.interviewComplete));
+  const [readBackSummary, setReadBackSummary] = useState(stored?.readBackSummary || "");
+  const [readBackConfirmed, setReadBackConfirmed] = useState(Boolean(stored?.readBackConfirmed));
   const [language, setLanguage] = useState(stored?.language || null);
   const [interactionMode, setInteractionMode] = useState(stored?.interactionMode || null);
   const [patientInfo, setPatientInfo] = useState(stored?.patientInfo || null);
@@ -78,6 +80,7 @@ function App() {
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState(stored?.messages || [{ role: "assistant", content: greeting(stored?.language) }]);
   const [redFlagReason, setRedFlagReason] = useState(stored?.redFlagReason || "");
+  const [redFlagCategory, setRedFlagCategory] = useState(stored?.redFlagCategory || "");
   const [redFlagEvents, setRedFlagEvents] = useState(stored?.redFlagEvents || []);
   const [isSending, setIsSending] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -146,6 +149,9 @@ function App() {
     setMessages([{ role: "assistant", content: greeting("en") }]);
     setMessage("");
     setRedFlagReason("");
+    setRedFlagCategory("");
+    setReadBackSummary("");
+    setReadBackConfirmed(false);
     setRedFlagEvents([]);
     setScannedDocuments([]);
     setError("");
@@ -219,9 +225,10 @@ function App() {
     if (!sessionToken || STAFF_PAGES.has(page)) return;
     window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
       page, sessionId, sessionToken, language, interactionMode, patientInfo, department,
-      interviewData, interviewComplete, messages, redFlagReason, redFlagEvents, scannedDocuments,
+      interviewData, interviewComplete, messages, redFlagReason, redFlagCategory, redFlagEvents, scannedDocuments,
+      readBackSummary, readBackConfirmed,
     }));
-  }, [page, sessionId, sessionToken, language, interactionMode, patientInfo, department, interviewData, interviewComplete, messages, redFlagReason, redFlagEvents, scannedDocuments]);
+  }, [page, sessionId, sessionToken, language, interactionMode, patientInfo, department, interviewData, interviewComplete, messages, redFlagReason, redFlagCategory, redFlagEvents, scannedDocuments, readBackSummary, readBackConfirmed]);
 
   useEffect(() => {
     if (!stored?.sessionToken) return undefined;
@@ -414,21 +421,55 @@ function App() {
       setMessages((current) => [...current, { role: "assistant", content: result.reply }]);
       setInterviewData(result.data);
       setInterviewComplete(Boolean(result.interview_complete));
+      setReadBackConfirmed(Boolean(result.read_back_confirmed));
+      if (result.read_back_summary) {
+        setReadBackSummary(result.read_back_summary);
+        setMessages((current) => [...current, { role: "assistant", content: result.read_back_summary }]);
+        void speakAssistant(result.read_back_summary, generation);
+      }
       if (result.red_flag) {
         const reason = result.red_flag_reason || "Urgent symptoms detected";
         setRedFlagReason(reason);
+        setRedFlagCategory(result.red_flag_category || "general");
         if (result.red_flag_source) {
           setRedFlagEvents((current) => current.some((event) => event.reason === reason && event.source === result.red_flag_source)
             ? current
             : [...current, { reason, source: result.red_flag_source, timestamp: new Date().toISOString() }]);
         }
       }
-      void speakAssistant(result.reply, generation);
+      if (!result.read_back_summary) void speakAssistant(result.reply, generation);
     } catch (requestError) {
       if (requestError.name !== "AbortError" && generation === requestGenerationRef.current) setError(requestError.message || "Unable to reach the backend.");
     } finally {
       controllersRef.current.delete(controller);
       if (generation === requestGenerationRef.current && !alreadySending) setIsSending(false);
+    }
+  }
+
+  async function confirmReadBack() {
+    setReadBackConfirmed(true);
+    try {
+      await apiFetch(`/sessions/${sessionId}/read-back/confirm`, { method: "POST" });
+    } catch {
+      // The confirmation itself is best-effort UI state; the doctor still sees
+      // the underlying data either way, and a network hiccup here shouldn't
+      // trap the patient on this screen.
+    }
+  }
+
+  async function disputeReadBack() {
+    setReadBackConfirmed(true);
+    setMessages((current) => [...current, {
+      role: "assistant",
+      content: language === "hi"
+        ? "धन्यवाद, हमने स्टाफ को इसकी दोबारा जांच करने के लिए सूचित कर दिया है।"
+        : "Thank you, we've asked staff to double-check this with you.",
+    }]);
+    try {
+      await apiFetch(`/sessions/${sessionId}/read-back/dispute`, { method: "POST" });
+    } catch {
+      // Best-effort - staff still see the record; a delivery failure here
+      // shouldn't trap the patient on this screen.
     }
   }
 
@@ -579,7 +620,7 @@ function App() {
   else if (page === "patient") pageContent = <PatientIdentification language={language} interactionMode={interactionMode} sessionId={sessionId} sessionToken={sessionToken} onComplete={(patient) => { setPatientInfo(patient); navigate("department"); }} onBack={() => void returnToStart(false)} onClearData={() => void returnToStart(true)} />;
   else if (page === "department") pageContent = <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(value) => void chooseDepartment(value)} onBack={() => navigate("patient")} onClearData={() => void returnToStart(true)} />;
   else if (page === "documents") pageContent = <DocumentScanner language={language} interactionMode={interactionMode} initialDocuments={scannedDocuments} onDocumentsChange={(docs) => void persistDocuments(docs)} onDone={(docs) => { void persistDocuments(docs); navigate("chat"); }} onBack={() => navigate("chat")} onClearData={() => void returnToStart(true)} />;
-  else if (interactionMode === "speak") pageContent = <SpeakInterview language={language} messages={messages} redFlagReason={redFlagReason} isSending={isSending} isSpeaking={isSpeaking} isRecording={isRecording} interviewComplete={interviewComplete} idleWarning={idleWarning} error={error} documentCount={scannedDocuments.length} message={message} onMessageChange={setMessage} onSend={(value) => void sendTextMessage(value)} onToggleRecording={isRecording ? stopRecording : startRecording} onSwitchToChat={() => void chooseInteractionMode("chat", "chat")} onDocuments={() => navigate("documents")} onDashboard={() => navigate("dashboard")} onClearData={() => void returnToStart(true)} />;
+  else if (interactionMode === "speak") pageContent = <SpeakInterview language={language} messages={messages} redFlagReason={redFlagReason} redFlagCategory={redFlagCategory} isSending={isSending} isSpeaking={isSpeaking} isRecording={isRecording} interviewComplete={interviewComplete} readBackSummary={readBackSummary} readBackConfirmed={readBackConfirmed} onConfirmReadBack={() => void confirmReadBack()} onDisputeReadBack={() => void disputeReadBack()} idleWarning={idleWarning} error={error} documentCount={scannedDocuments.length} message={message} onMessageChange={setMessage} onSend={(value) => void sendTextMessage(value)} onToggleRecording={isRecording ? stopRecording : startRecording} onSwitchToChat={() => void chooseInteractionMode("chat", "chat")} onDocuments={() => navigate("documents")} onDashboard={() => navigate("dashboard")} onClearData={() => void returnToStart(true)} />;
   else pageContent = (
     <main className="app-shell">
       <section className="chat-card" aria-label="MediKiosk patient interview">
@@ -587,12 +628,33 @@ function App() {
           <div><p className="eyebrow">MediKiosk</p><h1>{language === "hi" ? "रोगी साक्षात्कार" : "Patient interview"}</h1><p className="subtitle">{language === "hi" ? "डॉक्टर की समीक्षा के लिए संरचित स्वास्थ्य इतिहास।" : "A structured history for your physician to review."}</p></div>
           <div className="header-actions"><ClearDataButton language={language} onClearData={() => void returnToStart(true)} /><a className="dashboard-link" href="#documents" onClick={(event) => { event.preventDefault(); navigate("documents"); }}>{scannedDocuments.length ? (language === "hi" ? `दस्तावेज़ (${scannedDocuments.length}) →` : `Documents (${scannedDocuments.length}) →`) : (language === "hi" ? "दस्तावेज़ स्कैन करें →" : "Scan documents →")}</a><a className="dashboard-link" href="#dashboard" onClick={(event) => { event.preventDefault(); navigate("dashboard"); }}>{language === "hi" ? "डॉक्टर सारांश →" : "Doctor dashboard →"}</a></div>
         </header>
-        {redFlagReason && <div className="red-alert" role="alert"><span className="alert-icon">!</span><div><strong>{language === "hi" ? "तुरंत ध्यान देने की आवश्यकता है" : "Urgent attention needed"}</strong><p>{redFlagReason}</p></div></div>}
+        {redFlagReason && (redFlagCategory === "mental_health_crisis" ? (
+          <div className="calm-support-alert" role="status">
+            <div>
+              <strong>{language === "hi" ? "हम आपकी सहायता के लिए यहाँ हैं" : "We're here to help"}</strong>
+              <p>{language === "hi" ? "किसी सदस्य ने आपसे बात करने के लिए संपर्क किया है। कृपया वहीं रहें।" : "A member of our team has been asked to come speak with you. Please stay where you are."}</p>
+            </div>
+          </div>
+        ) : (
+          <div className="red-alert" role="alert"><span className="alert-icon">!</span><div><strong>{language === "hi" ? "तुरंत ध्यान देने की आवश्यकता है" : "Urgent attention needed"}</strong><p>{redFlagReason}</p></div></div>
+        ))}
         <div className="message-list" ref={messageListRef} aria-live="polite">
           {messages.map((entry, index) => <div className={`message-row ${entry.role}`} key={`${entry.role}-${index}`}><div className="message-bubble"><span className="message-author">{entry.role === "user" ? (language === "hi" ? "आप" : "You") : "MediKiosk"}</span><p>{entry.content}</p></div></div>)}
           {isSending && <div className="message-row assistant"><div className="message-bubble typing" aria-label="MediKiosk is typing"><span className="dot" /><span className="dot" /><span className="dot" /></div></div>}
         </div>
-        {interviewComplete && interviewData && <div className="completion-card"><div><strong>{language === "hi" ? "साक्षात्कार पूरा हुआ" : "Interview complete"}</strong><p>{language === "hi" ? "संरचित सारांश डॉक्टर की समीक्षा के लिए तैयार है।" : "The structured summary is ready for physician review."}</p></div><button type="button" onClick={() => navigate("dashboard")}>{language === "hi" ? "डॉक्टर का सारांश देखें →" : "View doctor summary →"}</button></div>}
+        {interviewComplete && readBackSummary && !readBackConfirmed && (
+          <div className="completion-card read-back-card">
+            <div>
+              <strong>{language === "hi" ? "क्या यह सही है?" : "Did we get that right?"}</strong>
+              <p>{language === "hi" ? "ऊपर दिए गए सारांश की पुष्टि करें।" : "Please confirm the summary above before we finish."}</p>
+            </div>
+            <div className="read-back-actions">
+              <button type="button" onClick={() => void confirmReadBack()}>{language === "hi" ? "हाँ, सही है" : "Yes, that's correct"}</button>
+              <button type="button" className="read-back-dispute" onClick={() => void disputeReadBack()}>{language === "hi" ? "नहीं, सही नहीं है" : "No, that's not right"}</button>
+            </div>
+          </div>
+        )}
+        {interviewComplete && interviewData && (!readBackSummary || readBackConfirmed) && <div className="completion-card"><div><strong>{language === "hi" ? "साक्षात्कार पूरा हुआ" : "Interview complete"}</strong><p>{language === "hi" ? "संरचित सारांश डॉक्टर की समीक्षा के लिए तैयार है।" : "The structured summary is ready for physician review."}</p></div><button type="button" onClick={() => navigate("dashboard")}>{language === "hi" ? "डॉक्टर का सारांश देखें →" : "View doctor summary →"}</button></div>}
         {idleWarning && <p className="idle-warning" role="alert">{language === "hi" ? "निष्क्रियता के कारण यह मुलाकात एक मिनट में रीसेट हो जाएगी। जारी रखने के लिए स्क्रीन छुएँ।" : "This visit will reset in one minute due to inactivity. Touch the screen to continue."}</p>}
         {error && <p className="error-message" role="alert">{error}</p>}
         <form className="composer" onSubmit={(event) => { event.preventDefault(); void sendTextMessage(message); }}>

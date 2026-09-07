@@ -6,10 +6,15 @@ function SpeakInterview({
   language,
   messages,
   redFlagReason,
+  redFlagCategory,
   isSending,
   isSpeaking,
   isRecording,
   interviewComplete,
+  readBackSummary,
+  readBackConfirmed,
+  onConfirmReadBack,
+  onDisputeReadBack,
   idleWarning,
   error,
   documentCount,
@@ -22,6 +27,7 @@ function SpeakInterview({
   onDashboard,
   onClearData,
 }) {
+  const pendingReadBack = interviewComplete && readBackSummary && !readBackConfirmed;
   const isHindi = language === "hi";
   const [showManualInput, setShowManualInput] = useState(false);
   const latestAssistant = [...messages].reverse().find((entry) => entry.role === "assistant")?.content || "";
@@ -46,7 +52,16 @@ function SpeakInterview({
         </div>
       </header>
 
-      {redFlagReason && <div className="red-alert speak-red-alert" role="alert"><span className="alert-icon">!</span><div><strong>{isHindi ? "तुरंत सहायता बुलाई गई है" : "Urgent help has been requested"}</strong><p>{redFlagReason}</p></div></div>}
+      {redFlagReason && (redFlagCategory === "mental_health_crisis" ? (
+        <div className="calm-support-alert speak-calm-alert" role="status">
+          <div>
+            <strong>{isHindi ? "हम आपकी सहायता के लिए यहाँ हैं" : "We're here to help"}</strong>
+            <p>{isHindi ? "किसी सदस्य ने आपसे बात करने के लिए संपर्क किया है। कृपया वहीं रहें।" : "A member of our team has been asked to come speak with you. Please stay where you are."}</p>
+          </div>
+        </div>
+      ) : (
+        <div className="red-alert speak-red-alert" role="alert"><span className="alert-icon">!</span><div><strong>{isHindi ? "तुरंत सहायता बुलाई गई है" : "Urgent help has been requested"}</strong><p>{redFlagReason}</p></div></div>
+      ))}
 
       <section className="speak-orb-stage" aria-label="Voice interview">
         <button className="orb-touch-target" type="button" onClick={onToggleRecording} disabled={isSending || interviewComplete} aria-label={isRecording ? "Stop listening" : "Start listening"}>
@@ -54,7 +69,13 @@ function SpeakInterview({
         </button>
         <p className="spoken-caption" aria-live="polite">{latestAssistant}</p>
         {isRecording && <p className="recording-status"><span className="recording-dot" /> {isHindi ? "सुन रहे हैं… बोलना पूरा होने पर रुकें" : "Listening… stop when you have finished"}</p>}
-        {interviewComplete && <p className="speak-complete">{isHindi ? "इतिहास डॉक्टर की समीक्षा के लिए तैयार है।" : "Your history is ready for the doctor to review."}</p>}
+        {pendingReadBack && (
+          <div className="read-back-actions speak-read-back-actions">
+            <button type="button" onClick={onConfirmReadBack}>{isHindi ? "हाँ, सही है" : "Yes, that's correct"}</button>
+            <button type="button" className="read-back-dispute" onClick={onDisputeReadBack}>{isHindi ? "नहीं, सही नहीं है" : "No, that's not right"}</button>
+          </div>
+        )}
+        {interviewComplete && !pendingReadBack && <p className="speak-complete">{isHindi ? "इतिहास डॉक्टर की समीक्षा के लिए तैयार है।" : "Your history is ready for the doctor to review."}</p>}
         {idleWarning && <p className="idle-warning" role="alert">{isHindi ? "एक मिनट में यह मुलाकात रीसेट होगी। जारी रखने के लिए स्क्रीन छुएँ।" : "This visit will reset in one minute. Touch the screen to continue."}</p>}
         {error && <p className="error-message" role="alert">{error}</p>}
       </section>
@@ -63,7 +84,7 @@ function SpeakInterview({
         <button type="button" onClick={onToggleRecording} disabled={isSending || interviewComplete}>{isRecording ? (isHindi ? "रोकें" : "Stop") : (isHindi ? "बोलें" : "Speak")}</button>
         <button type="button" onClick={() => setShowManualInput((value) => !value)}>{isHindi ? "टाइप करें" : "Type answer"}</button>
         <button type="button" onClick={onSwitchToChat}>{isHindi ? "चैट पर जाएँ" : "Switch to Chat"}</button>
-        {interviewComplete && <button type="button" onClick={onDashboard}>{isHindi ? "डॉक्टर सारांश" : "Doctor summary"}</button>}
+        {interviewComplete && !pendingReadBack && <button type="button" onClick={onDashboard}>{isHindi ? "डॉक्टर सारांश" : "Doctor summary"}</button>}
       </nav>
 
       {showManualInput && (

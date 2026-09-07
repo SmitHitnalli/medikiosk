@@ -6,5 +6,14 @@
   {"id":"hi-bleeding-emergency","text":"बहुत ज्यादा खून बह रहा है","expected_red_flag":true},
   {"id":"en-routine-headache","text":"I have had a mild headache since yesterday","expected_red_flag":false},
   {"id":"en-negated-chest","text":"I have acidity but no chest pain and no breathing difficulty","expected_red_flag":false},
-  {"id":"hi-routine-digestion","text":"खाना खाने के बाद हल्की गैस होती है","expected_red_flag":false}
+  {"id":"hi-routine-digestion","text":"खाना खाने के बाद हल्की गैस होती है","expected_red_flag":false},
+  {"id":"en-obstetric-bleeding","text":"I am pregnant and bleeding heavily","expected_red_flag":true},
+  {"id":"en-obstetric-fetal-movement","text":"My baby has stopped moving since this morning","expected_red_flag":true},
+  {"id":"hi-obstetric-bleeding","text":"मैं गर्भवती हूं और बहुत खून बह रहा है","expected_red_flag":true},
+  {"id":"hi-obstetric-fetal-movement","text":"बच्चा हिल नहीं रहा है","expected_red_flag":true},
+  {"id":"en-anaphylaxis","text":"My throat is swelling and I can't breathe after eating peanuts","expected_red_flag":true},
+  {"id":"hi-anaphylaxis","text":"मुझे एलर्जी हो गई है और गले में सूजन है","expected_red_flag":true},
+  {"id":"en-mental-health-crisis","text":"I want to end my life, there is no reason to live","expected_red_flag":true},
+  {"id":"hi-mental-health-crisis","text":"मेरा जीने का मन नहीं कर रहा, मैं आत्महत्या के बारे में सोच रहा हूं","expected_red_flag":true},
+  {"id":"en-mental-health-negated","text":"I sometimes feel low but I don't want to hurt myself","expected_red_flag":false}
 ]

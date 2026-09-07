@@ -13,6 +13,43 @@ function formatTimeAgo(isoString) {
   return `${hours}h ago`;
 }
 
+// One audio tone, played through the Web Audio API - no external
+// SMS/pager integration and no audio asset file needed. Escalated alerts
+// (already flagged by the backend once they go unacknowledged past
+// ALERT_ESCALATION_SECONDS) get a louder, two-beep tone; fresh alerts get a
+// quieter single beep. Best-effort: browsers that block audio without a
+// prior user gesture, or don't support Web Audio, simply stay silent - the
+// visible alert card remains the primary signal either way.
+function playAlertTone(audioCtxRef, hasEscalated) {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!audioCtxRef.current) audioCtxRef.current = new Ctx();
+    const ctx = audioCtxRef.current;
+    if (ctx.state === "suspended") void ctx.resume();
+    const playTone = (delaySeconds, frequency, volume, duration) => {
+      const oscillator = ctx.createOscillator();
+      const gain = ctx.createGain();
+      oscillator.type = "sine";
+      oscillator.frequency.value = frequency;
+      gain.gain.value = volume;
+      oscillator.connect(gain);
+      gain.connect(ctx.destination);
+      const startAt = ctx.currentTime + delaySeconds;
+      oscillator.start(startAt);
+      oscillator.stop(startAt + duration);
+    };
+    if (hasEscalated) {
+      playTone(0, 1046, 0.35, 0.35);
+      playTone(0.4, 1046, 0.35, 0.35);
+    } else {
+      playTone(0, 784, 0.12, 0.15);
+    }
+  } catch {
+    // Audio unavailable or blocked - the visible alert card is still shown.
+  }
+}
+
 // Nurse Station: polls the backend for active red-flag alerts (deterministic
 // keyword check + LLM secondary check, combined server-side) and lets staff
 // acknowledge each one. No websockets - simple polling fits the hackathon
@@ -25,6 +62,7 @@ function NurseStation({ onBack, staffToken, staffUser, onSessionExpired, onLogou
   const [, forceTick] = useState(0);
   const pollRef = useRef(null);
   const tickRef = useRef(null);
+  const audioCtxRef = useRef(null);
 
   const fetchAlerts = useCallback(async () => {
     try {
@@ -35,8 +73,12 @@ function NurseStation({ onBack, staffToken, staffUser, onSessionExpired, onLogou
       }
       if (!response.ok) throw new Error("Could not load alerts");
       const result = await response.json();
-      setAlerts(result.alerts || []);
+      const activeAlerts = result.alerts || [];
+      setAlerts(activeAlerts);
       setError("");
+      if (activeAlerts.length > 0) {
+        playAlertTone(audioCtxRef, activeAlerts.some((alert) => alert.escalated));
+      }
     } catch (fetchError) {
       setError(fetchError.message || "Unable to reach the backend.");
     } finally {
@@ -110,14 +152,14 @@ function NurseStation({ onBack, staffToken, staffUser, onSessionExpired, onLogou
         <div className="nurse-station-list">
           {alerts.map((alert) => (
             <section
-              className={`dashboard-card nurse-alert-card ${alert.kind === "help_request" ? "nurse-alert-help" : ""} ${alert.escalated ? "nurse-alert-escalated" : ""}`}
+              className={`dashboard-card nurse-alert-card ${alert.kind !== "red_flag" ? "nurse-alert-help" : ""} ${alert.escalated ? "nurse-alert-escalated" : ""}`}
               key={alert.id}
             >
               <div className="nurse-alert-heading">
                 <span className="nurse-alert-pulse" aria-hidden="true" />
                 <div>
                   <p className="section-kicker">
-                    {alert.kind === "help_request" ? "🆘 Help requested" : "🚩 Red flag"} · {alert.department || "General"}
+                    {alert.kind === "help_request" ? "🆘 Help requested" : alert.kind === "read_back_dispute" ? "📝 Summary flagged" : "🚩 Red flag"} · {alert.department || "General"}
                     {alert.escalated ? " · ESCALATED" : ""}
                   </p>
                   <h2>{alert.patient_name || "Unknown patient"}</h2>
