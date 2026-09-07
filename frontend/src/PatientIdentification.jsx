@@ -55,6 +55,8 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
   const [step, setStep] = useState("question");
   const [name, setName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [abhaNumber, setAbhaNumber] = useState("");
+  const [abhaAddress, setAbhaAddress] = useState("");
   const [mediId, setMediId] = useState("");
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [registeredId, setRegisteredId] = useState("");
@@ -223,7 +225,7 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
       const response = await apiFetch("/patients/register", {
         method: "POST",
         headers: patientHeaders(sessionId, sessionToken, true),
-        body: JSON.stringify({ name: name.trim(), phone_number: normalisePhone(phoneNumber) }),
+        body: JSON.stringify({ name: name.trim(), phone_number: normalisePhone(phoneNumber), abha_number: abhaNumber.replace(/\D/g, ""), abha_address: abhaAddress.trim() }),
         signal: controller.signal,
       }, 10000);
       const result = await response.json();
@@ -271,6 +273,9 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
         medi_id: result.medi_id,
         name: result.name,
         phone_number: result.phone_number,
+        abha_number: result.abha_number,
+        abha_address: result.abha_address,
+        abha_status: result.abha_status,
         prakriti: result.prakriti,
         returning_patient: true,
       });
@@ -292,7 +297,7 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
   }
 
   function finishNewPatient() {
-    onComplete({ medi_id: registeredId, name: name.trim(), phone_number: normalisePhone(phoneNumber), prakriti: null, returning_patient: false });
+    onComplete({ medi_id: registeredId, name: name.trim(), phone_number: normalisePhone(phoneNumber), abha_status: abhaNumber ? "patient_provided" : "not_linked", prakriti: null, returning_patient: false });
   }
 
   const prompt = PROMPTS[language] || PROMPTS.en;
@@ -316,6 +321,12 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
             <label>{isHindi ? "नाम" : "Name"}<input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>
             {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "name" ? stopListening() : startListening("name")}>{recordingField === "name" ? (isHindi ? "नाम रिकॉर्ड करना बंद करें" : "Stop name recording") : (isHindi ? "🎙 अपना नाम बोलें" : "🎙 Say your name")}</button>}
             <label>{isHindi ? "फ़ोन नंबर" : "Phone number"}<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} inputMode="tel" autoComplete="tel" /></label>
+            <details className="abha-optional-fields">
+              <summary>{isHindi ? "ABHA जोड़ें (वैकल्पिक)" : "Add ABHA (optional)"}</summary>
+              <p className="start-copy">{isHindi ? "ABHA विवरण केवल टच कीबोर्ड से भरें। कर्मचारी इसे सत्यापित करेगा।" : "Enter ABHA details with the touch keyboard. A staff member must verify the link."}</p>
+              <label>ABHA number<input value={abhaNumber} onChange={(event) => setAbhaNumber(event.target.value.replace(/\D/g, "").slice(0, 14))} inputMode="numeric" placeholder="14 digits" /></label>
+              <label>ABHA address<input value={abhaAddress} onChange={(event) => setAbhaAddress(event.target.value.toLowerCase())} autoCapitalize="none" placeholder="name@abdm" /></label>
+            </details>
             {recordingField && <p className="recording-status patient-recording"><span className="recording-dot" /> {isHindi ? "सुन रहे हैं..." : "Listening..."}</p>}
             <button className="start-button" type="submit" disabled={isBusy}>{isBusy ? (isHindi ? "दर्ज हो रहा है..." : "Registering...") : (isHindi ? "मेडी आईडी बनाएँ" : "Create Medi ID")}</button>
           </form>

@@ -422,6 +422,60 @@ class MediKioskRegressionTests(unittest.TestCase):
         self.assertEqual(entities["medication_verification"][0]["matched_generic"], "paracetamol")
         self.assertEqual(entities["medication_verification"][1]["status"], "unverified")
 
+    def test_hybrid_abha_identity_and_abdm_milestone_contracts(self):
+        session_id, _, _, medi_id = self.active_session()
+        staff = self.staff_headers()
+        link = self.client.patch(
+            f"/staff/patients/{medi_id}/abha", headers=staff,
+            json={"abha_number": "12345678901234", "abha_address": "regression@abdm",
+                  "verification_method": "sandbox_test", "verification_reference": "test-reference"},
+        )
+        self.assertEqual(link.status_code, 200, link.text)
+        self.assertEqual(link.json()["abha_number"], "**-****-****-1234")
+        self.assertNotIn("12345678901234", json.dumps(link.json()))
+
+        self.client.patch(
+            f"/staff/sessions/{session_id}/record", headers=staff,
+            json={"reason": "ABDM test record", "changes": {"chief_complaint": "Routine follow-up"}},
+        )
+        signed = self.client.post(
+            f"/staff/sessions/{session_id}/signoff", headers=staff, json={"attestation": True}
+        )
+        self.assertEqual(signed.status_code, 200, signed.text)
+        contexts = self.client.get(f"/staff/patients/{medi_id}/care-contexts", headers=staff).json()["care_contexts"]
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0]["abha_address"], "regression@abdm")
+
+        export = self.client.post(
+            "/abdm/push", headers=staff,
+            json={"session_id": session_id, "physician_reviewed": True},
+        )
+        self.assertEqual(export.status_code, 200, export.text)
+        bundle = export.json()["bundle"]
+        self.assertEqual(main.validate_document_bundle(bundle), [])
+        self.assertEqual(bundle["type"], "document")
+        self.assertEqual(bundle["entry"][0]["resource"]["resourceType"], "Composition")
+
+        consent = self.client.post(
+            "/staff/abdm/hiu/consent-requests", headers=staff,
+            json={"patient_abha_address": "regression@abdm", "purpose": "Care management",
+                  "hi_types": ["OPConsultation"], "date_from": "2026-01-01", "date_to": "2026-12-31",
+                  "expires_at": "2027-01-01T00:00:00Z"},
+        )
+        self.assertEqual(consent.status_code, 200, consent.text)
+        self.assertEqual(consent.json()["status"], "locally_staged")
+
+        with patch.dict(os.environ, {"ABDM_CALLBACK_SECRET": "callback-test-secret"}):
+            callback = self.client.post(
+                "/abdm/callbacks/consent", headers={"X-ABDM-Callback-Secret": "callback-test-secret"},
+                json={"consentId": "artifact-1", "patientAbhaAddress": "regression@abdm", "status": "granted"},
+            )
+        self.assertEqual(callback.status_code, 200, callback.text)
+        self.assertEqual(
+            self.client.post("/abdm/callbacks/consent", json={"consentId": "bad"}).status_code,
+            503,
+        )
+
     def test_session_clear_removes_visit_but_retains_registry(self):
         session_id, token, headers, medi_id = self.active_session()
         response = self.client.delete(

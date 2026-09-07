@@ -160,6 +160,9 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   const [signoff, setSignoff] = useState(null);
   const [revisions, setRevisions] = useState([]);
   const [attested, setAttested] = useState(false);
+  const [abhaLink, setAbhaLink] = useState({ number: "", address: "", method: "qr", reference: "" });
+  const [abhaMessage, setAbhaMessage] = useState("");
+  const [abdmStatus, setAbdmStatus] = useState(null);
   const speechRequestRef = useRef(null);
 
   useEffect(() => {
@@ -200,6 +203,13 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
       }
     })();
   }, [sessionId, staffToken, onSessionExpired]);
+
+  useEffect(() => {
+    if (!staffToken) return;
+    apiFetch("/staff/abdm/status", { headers: staffHeaders(staffToken) }, 10000)
+      .then(async (response) => { if (response.ok) setAbdmStatus(await response.json()); })
+      .catch(() => {});
+  }, [staffToken]);
 
   // Hydrate any prior mock ABDM push for this session, so re-opening the
   // dashboard (or the physician navigating away and back) still shows it was
@@ -357,6 +367,22 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
     } catch (error) {
       setWorkflowState((current) => ({ ...current, error: error.message || "Could not create the PDF." }));
     }
+  }
+
+  async function saveAbhaLink(event) {
+    event.preventDefault(); setAbhaMessage("");
+    try {
+      const response = await apiFetch(`/staff/patients/${encodeURIComponent(mediId)}/abha`, {
+        method: "PATCH", headers: staffHeaders(staffToken, true), body: JSON.stringify({
+          abha_number: abhaLink.number.replace(/\D/g, ""), abha_address: abhaLink.address.trim(),
+          verification_method: abhaLink.method, verification_reference: abhaLink.reference.trim(),
+        }),
+      }, 10000);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "Could not link this ABHA identity.");
+      setAbhaMessage(`Verified ${result.abha_number}${result.abha_address ? ` · ${result.abha_address}` : ""}`);
+      setAbhaLink((current) => ({ ...current, number: "", reference: "" }));
+    } catch (error) { setAbhaMessage(error.message || "Could not link this ABHA identity."); }
   }
 
   async function saveAyushConfirmation(event) {
@@ -630,11 +656,19 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
             <p className="trust-metric-note">Select a patient session before reviewing and pushing its history.</p>
           ) : (
             <>
+              <p className="trust-metric-note">Integration: {abdmStatus?.live_ready ? "ABDM sandbox configured" : "local contract mode"} · FHIR R4 DocumentBundle / OPConsultRecord</p>
+              <form className="clinical-edit-form abha-link-form" onSubmit={saveAbhaLink}>
+                <label>ABHA number<input inputMode="numeric" maxLength="14" value={abhaLink.number} onChange={(event) => setAbhaLink((current) => ({ ...current, number: event.target.value.replace(/\D/g, "") }))} required /></label>
+                <label>ABHA address<input value={abhaLink.address} onChange={(event) => setAbhaLink((current) => ({ ...current, address: event.target.value.toLowerCase() }))} placeholder="name@abdm" /></label>
+                <label>Verification method<select value={abhaLink.method} onChange={(event) => setAbhaLink((current) => ({ ...current, method: event.target.value }))}><option value="qr">ABHA QR</option><option value="otp">OTP flow</option><option value="demographic_match">Demographic match</option><option value="sandbox_test">Sandbox test</option></select></label>
+                <label>Verification reference<input value={abhaLink.reference} onChange={(event) => setAbhaLink((current) => ({ ...current, reference: event.target.value }))} placeholder="Gateway request or staff reference" required minLength="3" /></label>
+                <button className="secondary-start-button" type="submit">Verify and link ABHA</button>
+              </form>
+              {abhaMessage && <p className="abdm-push-status">{abhaMessage}</p>}
               <p className="abdm-push-copy">
-                Sends this structured history as a FHIR Bundle, linked to the patient's Medi ID, to the hospital
-                HIS and the ABHA record. <strong>This is a mock integration</strong> - no real ABDM sandbox is
-                reachable from this environment, so the push is simulated and recorded here with the exact
-                Bundle that would be sent to a real ABDM endpoint.
+                Validates this signed history as an ABDM FHIR document and stages its care context. With sandbox
+                credentials and assigned API paths configured, the same action sends the care-context notification
+                through the ABDM gateway. Local mode keeps the validated bundle on this device for integration testing.
               </p>
               <div className="abdm-push-actions">
                 <button className="play-summary-button" type="button" onClick={handlePush} disabled={pushState === "pushing"}>
@@ -648,7 +682,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
               </div>
               {pushRecord && (
                 <p className="abdm-push-status">
-                  Pushed (mock) at {formatEventTime(pushRecord.pushed_at)} · Reference {pushRecord.abdm_reference}
+                  {pushRecord.delivery_mode === "sandbox" ? "Sent to sandbox" : "Validated locally"} at {formatEventTime(pushRecord.pushed_at)} · Reference {pushRecord.abdm_reference}
                 </p>
               )}
               {pushError && <p className="speech-error" role="alert">{pushError}</p>}

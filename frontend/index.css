@@ -501,7 +501,8 @@ html[data-high-contrast="true"] .a11y-help.a11y-help-sent { background-color: #6
 }
 
 .clinical-edit-form input,
-.clinical-edit-form textarea {
+.clinical-edit-form textarea,
+.clinical-edit-form select {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid #b7ccc5;

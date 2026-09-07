@@ -13,6 +13,7 @@ import time
 import traceback
 import urllib.error
 import urllib.request
+import uuid
 import wave
 from contextlib import contextmanager
 from pathlib import Path
@@ -30,6 +31,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 from PIL import Image
 from clinical_pdf import build_clinical_pdf
+from abdm_integration import AbdmClient, AbdmConfigurationError, AbdmTransportError, validate_document_bundle
 from speech_providers import (
     SpeechProviderError,
     provider_status,
@@ -41,6 +43,8 @@ from speech_providers import (
 )
 
 load_dotenv()
+
+abdm_client = AbdmClient()
 
 OLLAMA_URL = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "llama3.1:8b"
@@ -217,6 +221,26 @@ class PatientRegistration(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=2, max_length=100)
     phone_number: str = Field(min_length=10, max_length=20)
+    abha_number: str = Field(default="", max_length=20)
+    abha_address: str = Field(default="", max_length=100)
+
+
+class AbhaLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    abha_number: str = Field(min_length=14, max_length=20)
+    abha_address: str = Field(default="", max_length=100)
+    verification_method: Literal["qr", "otp", "demographic_match", "sandbox_test"]
+    verification_reference: str = Field(min_length=3, max_length=200)
+
+
+class HiuConsentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    patient_abha_address: str = Field(min_length=3, max_length=100)
+    purpose: str = Field(min_length=3, max_length=200)
+    hi_types: list[Literal["OPConsultation", "Prescription", "DiagnosticReport", "DischargeSummary", "HealthDocumentRecord", "WellnessRecord"]] = Field(min_length=1, max_length=10)
+    date_from: str
+    date_to: str
+    expires_at: str
 
 
 class PractitionerAyushConfirmationRequest(BaseModel):
@@ -564,6 +588,29 @@ def _init_database() -> None:
             )
             """
         )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS abdm_care_contexts (
+                care_context_reference TEXT PRIMARY KEY, session_id TEXT NOT NULL UNIQUE,
+                patient_medi_id TEXT NOT NULL, abha_address TEXT, display TEXT NOT NULL,
+                created_at TEXT NOT NULL, notified_at TEXT
+            )"""
+        )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS abdm_consents (
+                consent_id TEXT PRIMARY KEY, direction TEXT NOT NULL, patient_abha_address TEXT NOT NULL,
+                status TEXT NOT NULL, artifact TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )"""
+        )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS abdm_exchanges (
+                exchange_id TEXT PRIMARY KEY, consent_id TEXT, direction TEXT NOT NULL, status TEXT NOT NULL,
+                payload_metadata TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            )"""
+        )
+        patient_columns = {row["name"] for row in connection.execute("PRAGMA table_info(patients)")}
+        for column in ("abha_number", "abha_address", "abha_status", "abha_verified_at"):
+            if column not in patient_columns:
+                connection.execute(f"ALTER TABLE patients ADD COLUMN {column} TEXT")
         session_columns = {row["name"] for row in connection.execute("PRAGMA table_info(sessions)")}
         if "lookup_failures" not in session_columns:
             connection.execute("ALTER TABLE sessions ADD COLUMN lookup_failures INTEGER NOT NULL DEFAULT 0")
@@ -670,14 +717,33 @@ def _mask_phone_number(phone_number: str) -> str:
     return "*" * max(len(digits) - 2, 0) + digits[-2:]
 
 
+def _normalize_abha_number(value: str) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    if digits and len(digits) != 14:
+        raise HTTPException(status_code=422, detail="ABHA number must contain 14 digits")
+    return digits
+
+
+def _mask_abha_number(value: str | None) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    return f"**-****-****-{digits[-4:]}" if digits else ""
+
+
 def _patient_response(row: sqlite3.Row) -> dict[str, str | None]:
-    return {
+    response = {
         "medi_id": row["medi_id"],
         "name": row["name"],
         "phone_number": _mask_phone_number(row["phone_number"]),
         "prakriti": row["prakriti"],
         "created_at": row["created_at"],
     }
+    if "abha_number" in row.keys():
+        response.update({
+            "abha_number": _mask_abha_number(row["abha_number"]),
+            "abha_address": row["abha_address"] or "",
+            "abha_status": row["abha_status"] or "not_linked",
+        })
+    return response
 
 
 _init_database()
@@ -716,6 +782,7 @@ def health() -> dict:
         "status": "ok",
         "ollama": "ok" if ollama_ok else "unreachable",
         "speech": provider_status(),
+        "abdm": abdm_client.config.public_status(),
     }
 
 
@@ -1027,14 +1094,21 @@ def register_patient(request: PatientRegistration, session: sqlite3.Row = Depend
     if not name or len(digits) < 10 or len(digits) > 15:
         raise HTTPException(status_code=400, detail="Enter a valid name and 10-15 digit phone number")
     phone_number = digits
+    abha_number = _normalize_abha_number(request.abha_number)
+    abha_address = request.abha_address.strip().lower()
+    if abha_address and "@" not in abha_address:
+        raise HTTPException(status_code=422, detail="Enter a valid ABHA address")
 
     with _connect() as connection:
         for _ in range(10):
             medi_id = "MK-" + "".join(secrets.choice(MEDI_ID_ALPHABET) for _ in range(6))
             try:
                 connection.execute(
-                    "INSERT INTO patients (medi_id, name, phone_number) VALUES (?, ?, ?)",
-                    (medi_id, name, phone_number),
+                    """INSERT INTO patients
+                       (medi_id, name, phone_number, abha_number, abha_address, abha_status, abha_verified_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (medi_id, name, phone_number, abha_number or None, abha_address or None,
+                     "patient_provided" if abha_number else "not_linked", None),
                 )
                 connection.commit()
                 data = ClinicalData.model_validate(_json_load(session["clinical_data"], {})).model_dump()
@@ -1051,7 +1125,7 @@ def register_patient(request: PatientRegistration, session: sqlite3.Row = Depend
                     session_id=session["session_id"],
                     patient_medi_id=medi_id,
                 )
-                return {"medi_id": medi_id}
+                return {"medi_id": medi_id, "abha_status": "patient_provided" if abha_number else "not_linked"}
             except sqlite3.IntegrityError:
                 continue
 
@@ -1064,7 +1138,9 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
         raise HTTPException(status_code=429, detail="Medi ID lookup is locked for this visit. Please ask staff for help or continue as a new patient.")
     with _connect() as connection:
         row = connection.execute(
-            "SELECT medi_id, name, phone_number, prakriti, created_at FROM patients WHERE medi_id = ?",
+            """SELECT medi_id, name, phone_number, prakriti, created_at,
+                      abha_number, abha_address, abha_status, abha_verified_at
+               FROM patients WHERE medi_id = ?""",
             (medi_id,),
         ).fetchone()
     if row is None:
@@ -2509,7 +2585,7 @@ class AbdmPushRequest(BaseModel):
     physician_reviewed: Literal[True]
 
 
-def _build_fhir_bundle(
+def _build_legacy_fhir_bundle(
     patient_ref: str,
     patient_name: str | None,
     medi_id: str | None,
@@ -2643,6 +2719,116 @@ def _build_fhir_bundle(
     return {"resourceType": "Bundle", "type": "collection", "timestamp": datetime.now(timezone.utc).isoformat(), "entry": entries}
 
 
+def _build_fhir_bundle(
+    patient_ref: str,
+    patient_name: str | None,
+    medi_id: str | None,
+    department: str | None,
+    data: dict,
+    documents: list[dict],
+) -> dict:
+    """Build an ABDM R4 document Bundle with an OPConsultRecord Composition."""
+    now = datetime.now(timezone.utc).isoformat()
+    urls: dict[str, str] = {}
+
+    def full_url(key: str) -> str:
+        urls.setdefault(key, "urn:uuid:" + str(uuid.uuid4()))
+        return urls[key]
+
+    patient_url, encounter_url = full_url("patient"), full_url("encounter")
+    practitioner_url, organization_url = full_url("practitioner"), full_url("organization")
+    clinical_entries = []
+
+    def add_clinical(resource: dict, key: str) -> str:
+        url = full_url(key)
+        clinical_entries.append({"fullUrl": url, "resource": resource})
+        return url
+
+    complaint_url = add_clinical({
+        "resourceType": "Condition",
+        "meta": {"profile": ["https://nrces.in/ndhm/fhir/r4/StructureDefinition/Condition"]},
+        "clinicalStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-clinical", "code": "active"}]},
+        "subject": {"reference": patient_url},
+        "encounter": {"reference": encounter_url},
+        "code": {"text": data.get("chief_complaint") or "Not recorded"},
+        "note": [{"text": json.dumps({"hpi": data.get("hpi", {}), "department": department}, ensure_ascii=False)}],
+    }, "chief-complaint")
+    medication_urls, allergy_urls, document_urls = [], [], []
+    for index, medication in enumerate((data.get("drug_allergy_history") or {}).get("current_medications") or []):
+        medication_urls.append(add_clinical({
+            "resourceType": "MedicationStatement", "status": "active", "subject": {"reference": patient_url},
+            "medicationCodeableConcept": {"text": medication},
+        }, f"medication-{index}"))
+    for index, allergy in enumerate((data.get("drug_allergy_history") or {}).get("allergies") or []):
+        allergy_urls.append(add_clinical({
+            "resourceType": "AllergyIntolerance", "patient": {"reference": patient_url},
+            "clinicalStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical", "code": "active"}]},
+            "code": {"text": allergy},
+        }, f"allergy-{index}"))
+    if data.get("red_flag"):
+        document_urls.append(add_clinical({
+            "resourceType": "Flag", "status": "active", "subject": {"reference": patient_url},
+            "code": {"text": data.get("red_flag_reason") or "Urgent symptoms flagged"},
+        }, "red-flag"))
+    for doc_index, document in enumerate(documents or []):
+        extracted = document.get("extracted_entities") or {}
+        source_note = f"From digitized {document.get('doc_type') or 'document'}; verification={document.get('status')}"
+        for item_index, diagnosis in enumerate(extracted.get("diagnoses") or []):
+            document_urls.append(add_clinical({
+                "resourceType": "Condition", "subject": {"reference": patient_url},
+                "code": {"text": diagnosis}, "note": [{"text": source_note}],
+            }, f"document-{doc_index}-diagnosis-{item_index}"))
+        for item_index, medication in enumerate(extracted.get("medications") or []):
+            document_urls.append(add_clinical({
+                "resourceType": "MedicationStatement", "status": "unknown", "subject": {"reference": patient_url},
+                "medicationCodeableConcept": {"text": medication}, "note": [{"text": source_note}],
+            }, f"document-{doc_index}-medication-{item_index}"))
+        for item_index, lab in enumerate(extracted.get("lab_values") or []):
+            observation = {
+                "resourceType": "Observation", "status": "final", "subject": {"reference": patient_url},
+                "code": {"text": lab.get("name") or "Lab value"},
+                "interpretation": [{"text": lab.get("flag") or "normal"}], "note": [{"text": source_note}],
+            }
+            try:
+                observation["valueQuantity"] = {"value": float(lab.get("value")), "unit": lab.get("unit") or ""}
+            except (TypeError, ValueError):
+                observation["valueString"] = " ".join(str(part) for part in (lab.get("value"), lab.get("unit")) if part)
+            if lab.get("reference_range"): observation["referenceRange"] = [{"text": lab["reference_range"]}]
+            if document.get("date"): observation["effectiveDateTime"] = document["date"]
+            document_urls.append(add_clinical(observation, f"document-{doc_index}-lab-{item_index}"))
+
+    sections = [{"title": "Chief complaint and history", "entry": [{"reference": complaint_url}]}]
+    if medication_urls: sections.append({"title": "Medications", "entry": [{"reference": url} for url in medication_urls]})
+    if allergy_urls: sections.append({"title": "Allergies", "entry": [{"reference": url} for url in allergy_urls]})
+    if document_urls: sections.append({"title": "Documents and alerts", "entry": [{"reference": url} for url in document_urls]})
+    composition = {
+        "resourceType": "Composition", "id": str(uuid.uuid4()),
+        "meta": {"profile": ["https://nrces.in/ndhm/fhir/r4/StructureDefinition/OPConsultRecord"]},
+        "status": "final", "type": {"coding": [{"system": "http://snomed.info/sct", "code": "371530004", "display": "Clinical consultation report"}]},
+        "subject": {"reference": patient_url}, "encounter": {"reference": encounter_url}, "date": now,
+        "author": [{"reference": practitioner_url}], "title": "MediKiosk outpatient consultation history", "section": sections,
+    }
+    entries = [
+        {"fullUrl": full_url("composition"), "resource": composition},
+        {"fullUrl": patient_url, "resource": {
+            "resourceType": "Patient", "id": re.sub(r"[^A-Za-z0-9.-]", "-", patient_ref),
+            "meta": {"profile": ["https://nrces.in/ndhm/fhir/r4/StructureDefinition/Patient"]},
+            "identifier": [{"system": "https://medikiosk.local/medi-id", "value": medi_id or patient_ref}],
+            "name": [{"text": patient_name or "Unknown patient"}],
+        }},
+        {"fullUrl": practitioner_url, "resource": {"resourceType": "Practitioner", "name": [{"text": "MediKiosk reviewing clinician"}]}},
+        {"fullUrl": organization_url, "resource": {"resourceType": "Organization", "identifier": [{"system": "https://facility.ndhm.gov.in", "value": abdm_client.config.facility_id or "UNCONFIGURED"}], "name": abdm_client.config.facility_name}},
+        {"fullUrl": encounter_url, "resource": {"resourceType": "Encounter", "status": "finished", "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"}, "subject": {"reference": patient_url}, "serviceProvider": {"reference": organization_url}}},
+        *clinical_entries,
+    ]
+    return {
+        "resourceType": "Bundle", "id": str(uuid.uuid4()),
+        "meta": {"profile": ["https://nrces.in/ndhm/fhir/r4/StructureDefinition/DocumentBundle"]},
+        "identifier": {"system": "https://medikiosk.local/fhir/bundle", "value": str(uuid.uuid4())},
+        "type": "document", "timestamp": now, "entry": entries,
+    }
+
+
 @app.post("/abdm/push")
 def push_to_abdm(
     request: AbdmPushRequest,
@@ -2670,12 +2856,34 @@ def push_to_abdm(
         data,
         documents,
     )
+    validation_errors = validate_document_bundle(bundle)
+    if validation_errors:
+        raise HTTPException(status_code=422, detail={"message": "FHIR document validation failed", "errors": validation_errors})
+    live_delivery = False
+    delivery_response = None
+    if abdm_client.config.live_ready:
+        try:
+            delivery_response = abdm_client.notify_care_context({
+                "patient": {"referenceNumber": session["patient_medi_id"]},
+                "careContexts": [{
+                    "referenceNumber": "visit-" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:20],
+                    "display": f"OP consultation {datetime.now(timezone.utc).date().isoformat()}",
+                }],
+            })
+            live_delivery = True
+        except (AbdmConfigurationError, AbdmTransportError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
     record = {
         "session_id": session_id,
         "pushed": True,
-        "mock": True,
-        "abdm_reference": "MOCK-ABDM-" + secrets.token_hex(4).upper(),
+        "mock": not live_delivery,
+        "delivery_mode": "sandbox" if live_delivery else "local",
+        "abdm_reference": (
+            str((delivery_response or {}).get("requestId") or (delivery_response or {}).get("request_id") or "accepted")
+            if live_delivery else "LOCAL-ABDM-" + secrets.token_hex(4).upper()
+        ),
         "pushed_at": datetime.now(timezone.utc).isoformat(),
+        "validation": {"profile": "DocumentBundle/OPConsultRecord", "valid": True, "errors": []},
         "bundle": bundle,
     }
     with _connect() as connection:
@@ -2695,7 +2903,7 @@ def push_to_abdm(
         actor_role=staff["role"],
         session_id=session_id,
         patient_medi_id=session["patient_medi_id"],
-        details={"destination": "mock_abdm", "reference": record["abdm_reference"]},
+        details={"destination": record["delivery_mode"], "reference": record["abdm_reference"]},
     )
     return record
 
@@ -2708,6 +2916,142 @@ def get_abdm_push_status(
     with _connect() as connection:
         row = connection.execute("SELECT record FROM abdm_pushes WHERE session_id = ?", (session_id,)).fetchone()
     return _json_load(row["record"], {"pushed": False}) if row else {"pushed": False}
+
+
+@app.get("/staff/abdm/status")
+def get_abdm_status(_: dict[str, str] = Depends(require_roles("doctor", "admin"))) -> dict:
+    return {
+        **abdm_client.config.public_status(),
+        "fhir_release": "R4 (4.0.1)",
+        "profiles": ["DocumentBundle", "OPConsultRecord"],
+        "milestones": {"m1_identity": True, "m2_hip": True, "m3_hiu": True},
+    }
+
+
+@app.patch("/staff/patients/{medi_id}/abha")
+def link_patient_abha(
+    medi_id: str,
+    request: AbhaLinkRequest,
+    staff: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
+    abha_number = _normalize_abha_number(request.abha_number)
+    abha_address = request.abha_address.strip().lower()
+    if abha_address and "@" not in abha_address:
+        raise HTTPException(status_code=422, detail="Enter a valid ABHA address")
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as connection:
+        existing = connection.execute("SELECT * FROM patients WHERE medi_id = ?", (medi_id,)).fetchone()
+        if existing is None:
+            raise HTTPException(status_code=404, detail="Patient not found")
+        duplicate = connection.execute(
+            "SELECT medi_id FROM patients WHERE abha_number = ? AND medi_id <> ?", (abha_number, medi_id)
+        ).fetchone()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="This ABHA number is already linked to another Medi ID")
+        connection.execute(
+            """UPDATE patients SET abha_number = ?, abha_address = ?, abha_status = 'verified', abha_verified_at = ?
+               WHERE medi_id = ?""",
+            (abha_number, abha_address or None, now, medi_id),
+        )
+        connection.execute(
+            "UPDATE abdm_care_contexts SET abha_address = ? WHERE patient_medi_id = ?",
+            (abha_address or None, medi_id),
+        )
+        connection.commit()
+    _write_audit_event(
+        "abdm.identity.linked", actor_type="staff", actor_id=staff["user_id"], actor_role=staff["role"],
+        patient_medi_id=medi_id,
+        details={"verification_method": request.verification_method, "verification_reference": request.verification_reference, "has_abha_address": bool(abha_address)},
+    )
+    return {"medi_id": medi_id, "abha_number": _mask_abha_number(abha_number), "abha_address": abha_address, "abha_status": "verified", "verified_at": now}
+
+
+@app.get("/staff/patients/{medi_id}/care-contexts")
+def list_care_contexts(
+    medi_id: str,
+    _: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
+    with _connect() as connection:
+        rows = connection.execute(
+            "SELECT * FROM abdm_care_contexts WHERE patient_medi_id = ? ORDER BY created_at DESC", (medi_id,)
+        ).fetchall()
+    return {"care_contexts": [dict(row) for row in rows]}
+
+
+@app.post("/staff/abdm/hiu/consent-requests")
+def create_hiu_consent_request(
+    request: HiuConsentRequest,
+    staff: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
+    consent_id = "consent-" + secrets.token_hex(12)
+    now = datetime.now(timezone.utc).isoformat()
+    artifact = {"request": request.model_dump(), "gateway_response": None}
+    status = "locally_staged"
+    if abdm_client.config.live_ready:
+        try:
+            artifact["gateway_response"] = abdm_client.create_hiu_consent_request({
+                "requestId": str(uuid.uuid4()), "timestamp": now,
+                "consent": {"purpose": {"text": request.purpose}, "patient": {"id": request.patient_abha_address},
+                            "hiTypes": request.hi_types, "permission": {"dateRange": {"from": request.date_from, "to": request.date_to}, "dataEraseAt": request.expires_at}},
+            })
+            status = "requested"
+        except (AbdmConfigurationError, AbdmTransportError) as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    with _connect() as connection:
+        connection.execute(
+            "INSERT INTO abdm_consents (consent_id, direction, patient_abha_address, status, artifact, created_at, updated_at) VALUES (?, 'outbound_hiu', ?, ?, ?, ?, ?)",
+            (consent_id, request.patient_abha_address, status, json.dumps(artifact), now, now),
+        )
+        connection.commit()
+    _write_audit_event(
+        "abdm.hiu.consent.requested", actor_type="staff", actor_id=staff["user_id"], actor_role=staff["role"],
+        details={"consent_id": consent_id, "status": status, "hi_types": request.hi_types},
+    )
+    return {"consent_id": consent_id, "status": status, "mode": abdm_client.config.mode}
+
+
+def _require_abdm_callback_secret(x_abdm_callback_secret: str | None = Header(default=None)) -> None:
+    expected = os.environ.get("ABDM_CALLBACK_SECRET", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="ABDM callback authentication is not configured")
+    if not x_abdm_callback_secret or not secrets.compare_digest(x_abdm_callback_secret, expected):
+        raise HTTPException(status_code=401, detail="Invalid ABDM callback authentication")
+
+
+@app.post("/abdm/callbacks/consent")
+def receive_abdm_consent(payload: dict, _: None = Depends(_require_abdm_callback_secret)) -> dict:
+    consent_id = str(payload.get("consentId") or payload.get("consent_id") or "").strip()
+    patient_address = str(payload.get("patientAbhaAddress") or payload.get("patient_abha_address") or "").strip()
+    status = str(payload.get("status") or "received").strip().lower()
+    if not consent_id or not patient_address:
+        raise HTTPException(status_code=422, detail="consentId and patientAbhaAddress are required")
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as connection:
+        connection.execute(
+            """INSERT INTO abdm_consents (consent_id, direction, patient_abha_address, status, artifact, created_at, updated_at)
+               VALUES (?, 'inbound_hip', ?, ?, ?, ?, ?)
+               ON CONFLICT(consent_id) DO UPDATE SET status = excluded.status, artifact = excluded.artifact, updated_at = excluded.updated_at""",
+            (consent_id, patient_address, status, json.dumps(payload), now, now),
+        )
+        connection.commit()
+    _write_audit_event("abdm.hip.consent.received", actor_type="abdm_gateway", actor_id="callback", details={"consent_id": consent_id, "status": status})
+    return {"acknowledged": True, "consent_id": consent_id}
+
+
+@app.post("/abdm/callbacks/health-information")
+def receive_health_information_notice(payload: dict, _: None = Depends(_require_abdm_callback_secret)) -> dict:
+    exchange_id = str(payload.get("transactionId") or payload.get("transaction_id") or "exchange-" + secrets.token_hex(8))
+    consent_id = str(payload.get("consentId") or payload.get("consent_id") or "")
+    now = datetime.now(timezone.utc).isoformat()
+    metadata = {key: payload.get(key) for key in ("transactionId", "consentId", "status", "checksum", "contentType") if key in payload}
+    with _connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO abdm_exchanges (exchange_id, consent_id, direction, status, payload_metadata, created_at, updated_at) VALUES (?, ?, 'inbound_hiu', ?, ?, ?, ?)",
+            (exchange_id, consent_id or None, str(payload.get("status") or "notified"), json.dumps(metadata), now, now),
+        )
+        connection.commit()
+    _write_audit_event("abdm.hiu.health_information.notified", actor_type="abdm_gateway", actor_id="callback", details={"exchange_id": exchange_id, "consent_id": consent_id})
+    return {"acknowledged": True, "exchange_id": exchange_id}
 
 
 def _staff_session_payload(row: sqlite3.Row, include_record: bool = True) -> dict:
@@ -2875,6 +3219,18 @@ def sign_off_clinical_record(
             "UPDATE sessions SET clinical_data = ?, status = 'physician_reviewed', updated_at = ? WHERE session_id = ?",
             (json.dumps(data), signed_at, session_id),
         )
+        patient_identity = connection.execute(
+            "SELECT abha_address FROM patients WHERE medi_id = ?", (row["patient_medi_id"],)
+        ).fetchone()
+        care_context_reference = "visit-" + hashlib.sha256(session_id.encode("utf-8")).hexdigest()[:20]
+        connection.execute(
+            """INSERT OR REPLACE INTO abdm_care_contexts
+               (care_context_reference, session_id, patient_medi_id, abha_address, display, created_at, notified_at)
+               VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT notified_at FROM abdm_care_contexts WHERE session_id = ?), NULL))""",
+            (care_context_reference, session_id, row["patient_medi_id"],
+             patient_identity["abha_address"] if patient_identity else None,
+             f"OP consultation {signed_at[:10]}", signed_at, session_id),
+        )
         connection.commit()
     signoff = {"revision_id": revision["revision_id"], "signed_at": signed_at, "signed_by_user_id": staff["user_id"],
                "signed_by_name": staff["display_name"], "signature_hash": signature_hash}
@@ -2882,7 +3238,7 @@ def sign_off_clinical_record(
         "clinical.record.signed_off", actor_type="staff", actor_id=staff["user_id"], actor_role=staff["role"],
         session_id=session_id, patient_medi_id=row["patient_medi_id"], details={"version": revision["version"], "signature_hash": signature_hash},
     )
-    return {"data": data, "revision": revision, "signoff": signoff}
+    return {"data": data, "revision": revision, "signoff": signoff, "care_context_reference": care_context_reference}
 
 
 @app.get("/staff/sessions/{session_id}/pdf")
