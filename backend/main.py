@@ -138,8 +138,8 @@ For any symptom-based complaint, ensure you naturally cover: Site, Onset, Charac
 RED FLAG AWARENESS (secondary check only - a separate deterministic system handles this primarily):
 If you notice a pattern suggesting a medical emergency, set red_flag to true in your response and briefly acknowledge urgency in your reply.
 
-HARD CAP:
-After a maximum of 15-20 total exchanges, regardless of how complete the picture feels, set interview_complete to true and wrap up warmly (e.g. "Thank you, I think I have a good picture now - the doctor will take it from here").
+INTERVIEW CONTROL:
+The server decides which clinical topic is still missing and whether the interview is complete. Follow the ordered gap instructions provided with each turn. Set "asked_field" to the exact field path you ask about. Never skip to a different topic, ask more than one question, or mark the interview complete yourself.
 
 PHYSICAL EXAMINATION NOTE:
 Never attempt to assess anything requiring physical examination (pulse, palpation, visual inspection). If relevant, note in your final summary that Nadi Pariksha, Darshana, and Sparshana are to be conducted by the physician directly.
@@ -160,6 +160,7 @@ Always respond in this exact JSON format:
 "interview_complete": false,
 "red_flag": false,
 "red_flag_reason": "",
+"asked_field": "the exact requested field path, or null when no question is asked",
 "data": { ...fields matching the structure above, filled in as you learn them... }
 }"""
 
@@ -291,6 +292,7 @@ class ModelChatResponse(BaseModel):
     interview_complete: bool = False
     red_flag: bool = False
     red_flag_reason: str = ""
+    asked_field: str | None = Field(default=None, max_length=100)
     data: ClinicalData = Field(default_factory=ClinicalData)
 
 
@@ -854,6 +856,7 @@ def get_patient_session(session_id: str, x_session_token: str | None = Header(de
         "interaction_mode": row["interaction_mode"],
         "department": row["department"],
         "interview_complete": bool(row["interview_complete"]),
+        "coverage": _coverage_state(data, row["department"]),
         "data": data,
         "transcript": _json_load(row["transcript"], []),
         "documents": _validate_documents(_json_load(row["documents"], [])),
@@ -1566,6 +1569,79 @@ def _merge_accumulated_data(existing: dict, incoming: dict) -> dict:
     return existing
 
 
+def _list_has_negative_answer(value) -> bool:
+    negative_values = {"none", "no", "nil", "denies", "no known", "not applicable"}
+    return bool(value) and all(
+        isinstance(item, str) and item.strip().lower() in negative_values for item in value
+    )
+
+
+def _remove_nested_value(data: dict, path: str) -> None:
+    current = data
+    parts = path.split(".")
+    for part in parts[:-1]:
+        current = current.get(part)
+        if not isinstance(current, dict):
+            return
+    current.pop(parts[-1], None)
+
+
+def _set_nested_value(data: dict, path: str, value) -> None:
+    current = data
+    parts = path.split(".")
+    for part in parts[:-1]:
+        if not isinstance(current.get(part), dict):
+            current[part] = {}
+        current = current[part]
+    current[parts[-1]] = value
+
+
+def _find_clinical_conflict(
+    existing: dict,
+    incoming: dict,
+    latest_message: str,
+    pending_field: str | None = None,
+) -> tuple[str, object, object] | None:
+    correction_words = ("actually", "correction", "i meant", "sorry", "असल", "सुधार", "मतलब")
+    explicit_correction = any(word in latest_message.lower() for word in correction_words)
+    conflict_paths = (
+        "personal_history.smoking",
+        "personal_history.alcohol",
+        "drug_allergy_history.current_medications",
+        "drug_allergy_history.allergies",
+    )
+    for path in conflict_paths:
+        old_value = _get_nested_value(existing, path)
+        new_value = _get_nested_value(incoming, path)
+        if _value_is_empty(old_value) or _value_is_empty(new_value) or old_value == new_value:
+            continue
+        is_conflict = (
+            isinstance(old_value, bool) and isinstance(new_value, bool)
+        ) or (
+            isinstance(old_value, list)
+            and isinstance(new_value, list)
+            and _list_has_negative_answer(old_value) != _list_has_negative_answer(new_value)
+        )
+        if is_conflict and not explicit_correction and pending_field != path:
+            return path, old_value, new_value
+    return None
+
+
+def _conflict_reply(path: str, language: str) -> str:
+    topics = {
+        "personal_history.smoking": ("tobacco use", "तंबाकू के उपयोग"),
+        "personal_history.alcohol": ("alcohol use", "शराब के उपयोग"),
+        "drug_allergy_history.current_medications": ("current medicines", "अभी ली जा रही दवाओं"),
+        "drug_allergy_history.allergies": ("allergies", "एलर्जी"),
+    }
+    english_topic, hindi_topic = topics.get(path, ("that answer", "उस उत्तर"))
+    return (
+        f"मुझे {hindi_topic} के बारे में आपके पहले उत्तर से अलग जानकारी सुनाई दी। कृपया बताएं कि कौन सा उत्तर सही है?"
+        if language == "hi"
+        else f"I heard something different from your earlier answer about {english_topic}. Which answer is correct?"
+    )
+
+
 FIELD_PROMPTS = {
     "chief_complaint": "the patient's main health concern",
     "hpi.site": "where they feel the symptom",
@@ -1667,6 +1743,8 @@ def _required_fields(data: dict, department: str | None) -> list[str]:
     if is_ayush and not _value_is_empty(data.get("chief_complaint")):
         fields.extend(["ayush_assessment.vikriti", "ayush_assessment.agni"])
     fields.extend([
+        "drug_allergy_history.current_medications",
+        "drug_allergy_history.allergies",
         "hpi.site",
         "hpi.onset",
         "hpi.character",
@@ -1677,8 +1755,6 @@ def _required_fields(data: dict, department: str | None) -> list[str]:
         "hpi.severity",
         "past_medical_history",
         "past_surgical_history",
-        "drug_allergy_history.current_medications",
-        "drug_allergy_history.allergies",
         "family_history",
         "personal_history.diet",
         "personal_history.smoking",
@@ -1703,18 +1779,140 @@ def _next_missing_field(data: dict, department: str | None) -> str | None:
     return next((field for field in _required_fields(data, department) if _value_is_empty(_get_nested_value(data, field))), None)
 
 
-def _next_field_instruction(data: dict, department: str | None) -> str:
-    field = _next_missing_field(data, department)
-    if field:
+def _coverage_state(data: dict, department: str | None) -> dict:
+    required = _required_fields(data, department)
+    captured = [field for field in required if not _value_is_empty(_get_nested_value(data, field))]
+    next_field = _next_missing_field(data, department)
+    return {
+        "required_count": len(required),
+        "captured_count": len(captured),
+        "percent": round((len(captured) / len(required)) * 100) if required else 100,
+        "next_field": next_field,
+        "missing_fields": [field for field in required if field not in captured],
+    }
+
+
+def _next_field_instruction(data: dict, department: str | None, language: str = "en") -> str:
+    gaps = _coverage_state(data, department)["missing_fields"]
+    if not gaps:
         return (
-            "First extract the patient's latest answer into the data object. Do not invent facts. "
-            f"After incorporating that answer, the server is currently tracking {FIELD_PROMPTS[field]} as the next gap. "
-            "Your reply should only acknowledge the answer briefly; do not ask a question because the server adds it."
+            "Extract the patient's latest answer without inventing facts. Set asked_field to null and reply with a brief "
+            "acknowledgment. The server will close the interview."
         )
-    return "Extract the latest answer. Reply with only a brief acknowledgment; the server will close the interview."
+    descriptions = "; ".join(f"{field} = {FIELD_PROMPTS[field]}" for field in gaps)
+    language_instruction = "Hindi (Devanagari)" if language == "hi" else "English"
+    return (
+        "First extract the patient's latest answer into data without inventing facts. Then review this ordered list of "
+        f"remaining clinical gaps: {descriptions}. Ask one short, natural question in {language_instruction} about the first "
+        "field that is still empty after extraction. Briefly acknowledge the patient's answer before the question when useful. "
+        "Set asked_field to that exact field path. If the latest answer creates a conflict with previously recorded information, "
+        "ask one clarification question about the conflict and keep asked_field on that field."
+    )
 
 
-def _patient_reply(data: dict, department: str | None, language: str, complete: bool, red_flag: bool) -> str:
+def _retry_reply(language: str) -> str:
+    return (
+        "माफ़ कीजिए, मैं उस उत्तर को भरोसेमंद तरीके से दर्ज नहीं कर पाया। कृपया वही बात एक बार फिर कहें या टाइप करें।"
+        if language == "hi"
+        else "Sorry, I could not record that answer reliably. Please say or type the same answer once more."
+    )
+
+
+def _is_controlled_question(reply: str, asked_field: str | None, expected_field: str | None) -> bool:
+    return bool(expected_field and asked_field == expected_field and "?" in reply.strip())
+
+
+def _extract_target_value(field: str, latest_answer: str):
+    empty_value = _get_nested_value(ClinicalData().model_dump(), field)
+    expected_type = (
+        "an array of short strings; use [\"none\"] for a clear negative answer"
+        if isinstance(empty_value, list)
+        else "a JSON boolean"
+        if field in {"personal_history.smoking", "personal_history.alcohol"}
+        else "a JSON object of symptom names and values"
+        if isinstance(empty_value, dict)
+        else "a short string"
+    )
+    prompt = (
+        "Extract only the answer to one clinical intake question. Return JSON with exactly two keys: answered and value. "
+        f"The question topic is {FIELD_PROMPTS[field]}. The value must be {expected_type}. "
+        "Set answered to false when the patient did not answer that topic; otherwise set it to true, including for a clear "
+        "negative answer. Do not infer facts or add explanation. "
+        f"Patient message: {latest_answer}"
+    )
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "format": "json",
+        "keep_alive": "30m",
+    }
+    request = urllib.request.Request(
+        OLLAMA_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        result = _parse_model_json(_call_ollama(request))
+    except HTTPException:
+        return None
+    if not isinstance(result, dict) or result.get("answered") is not True:
+        return None
+    value = result.get("value")
+    if isinstance(empty_value, list):
+        return value if isinstance(value, list) and all(isinstance(item, str) for item in value) and value else None
+    if field in {"personal_history.smoking", "personal_history.alcohol"}:
+        return value if isinstance(value, bool) else None
+    if isinstance(empty_value, dict):
+        return value if isinstance(value, dict) and value else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _generate_controlled_question(
+    field: str,
+    language: str,
+    latest_answer: str,
+    previous_assistant_reply: str = "",
+) -> str:
+    language_name = "Hindi in Devanagari" if language == "hi" else "English"
+    prompt = (
+        "You are a warm clinical intake nurse. Return JSON only with one key named reply. "
+        f"Ask exactly one short, natural question in {language_name} about {FIELD_PROMPTS[field]}. "
+        "You may briefly acknowledge the patient's latest answer, but do not diagnose, suggest treatment, mention a schema, "
+        "imply that an answer caused the symptom, lead the patient toward an answer, or ask about a second topic. End with a question mark. "
+        f"Patient's latest answer: {latest_answer}\nPrevious nurse reply to avoid repeating: {previous_assistant_reply}"
+    )
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": False,
+        "format": "json",
+        "keep_alive": "30m",
+    }
+    request = urllib.request.Request(
+        OLLAMA_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        result = _parse_model_json(_call_ollama(request))
+    except HTTPException:
+        return ""
+    reply = result.get("reply", "") if isinstance(result, dict) else ""
+    return reply.strip() if isinstance(reply, str) and 1 <= len(reply.strip()) <= 500 and "?" in reply else ""
+
+
+def _patient_reply(
+    data: dict,
+    department: str | None,
+    language: str,
+    complete: bool,
+    red_flag: bool,
+    model_reply: str = "",
+    asked_field: str | None = None,
+) -> str:
     if red_flag:
         return (
             "आपके बताए लक्षणों के लिए तुरंत चिकित्सकीय सहायता चाहिए। कृपया वहीं रहें; स्टाफ को सूचना भेज दी गई है।"
@@ -1728,6 +1926,9 @@ def _patient_reply(data: dict, department: str | None, language: str, complete: 
             else "Thank you. The required history has been recorded for the doctor to review."
         )
     field = _next_missing_field(data, department)
+    candidate = model_reply.strip()
+    if _is_controlled_question(candidate, asked_field, field):
+        return candidate
     question = FIELD_QUESTIONS.get(language, FIELD_QUESTIONS["en"]).get(field, "Could you tell me a little more?")
     return ("धन्यवाद। " if language == "hi" else "Thank you. ") + question
 
@@ -1739,6 +1940,7 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
     if not session["patient_medi_id"] or not session["department"]:
         raise HTTPException(status_code=409, detail="Complete patient identification and department selection first")
     accumulated_data = ClinicalData.model_validate(_json_load(session["clinical_data"], {})).model_dump()
+    target_before_turn = _next_missing_field(accumulated_data, session["department"])
     transcript = _json_load(session["transcript"], [])
     recent_patient_text = " | ".join(
         entry.get("content", "") for entry in transcript[-6:] if isinstance(entry, dict) and entry.get("role") == "user"
@@ -1770,7 +1972,7 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "system", "content": context},
-        {"role": "system", "content": _next_field_instruction(accumulated_data, session["department"])},
+        {"role": "system", "content": _next_field_instruction(accumulated_data, session["department"], session["language"])},
     ]
     messages.extend(
         {"role": entry["role"], "content": entry["content"]}
@@ -1812,7 +2014,38 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
             result = _validate_chat_result(_parse_model_json(retry_content))
     except HTTPException:
         if not keyword_red_flag:
-            raise first_error or HTTPException(status_code=503, detail="The AI assistant is unavailable")
+            reply = _retry_reply(session["language"])
+            transcript.extend([
+                {"role": "user", "content": request.message, "timestamp": datetime.now(timezone.utc).isoformat()},
+                {"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()},
+            ])
+            with _connect() as connection:
+                connection.execute(
+                    "UPDATE sessions SET transcript = ?, updated_at = ? WHERE session_id = ?",
+                    (json.dumps(transcript), datetime.now(timezone.utc).isoformat(), session_id),
+                )
+                connection.commit()
+            _write_audit_event(
+                "clinical.turn.retry_requested",
+                actor_type="patient_session",
+                actor_id=session_id,
+                session_id=session_id,
+                patient_medi_id=session["patient_medi_id"],
+                details={"reason": "model_unavailable_or_invalid"},
+            )
+            return {
+                "reply": reply,
+                "interview_complete": False,
+                "red_flag": False,
+                "red_flag_reason": "",
+                "red_flag_source": None,
+                "retry_required": True,
+                "clarification_required": False,
+                "question_source": "retry",
+                "data": accumulated_data,
+                "coverage": _coverage_state(accumulated_data, session["department"]),
+                "turn_count": int(session["turn_count"]),
+            }
         result = ModelChatResponse(
             reply="Emergency detected",
             red_flag=False,
@@ -1828,6 +2061,18 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
         "red_flag", "red_flag_reason", "consent", "status", "interview_complete",
     ):
         incoming_data.pop(server_field, None)
+    if target_before_turn and _value_is_empty(_get_nested_value(incoming_data, target_before_turn)):
+        repaired_value = _extract_target_value(target_before_turn, request.message)
+        if repaired_value is not None:
+            _set_nested_value(incoming_data, target_before_turn, repaired_value)
+    pending_field = (
+        transcript[-1].get("clarification_field")
+        if transcript and isinstance(transcript[-1], dict) and transcript[-1].get("role") == "assistant"
+        else None
+    )
+    conflict = _find_clinical_conflict(accumulated_data, incoming_data, request.message, pending_field)
+    if conflict:
+        _remove_nested_value(incoming_data, conflict[0])
     _merge_accumulated_data(accumulated_data, incoming_data)
     accumulated_data["patient_id"] = session["patient_medi_id"] or ""
     accumulated_data["session_id"] = session_id
@@ -1853,12 +2098,57 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
         accumulated_data["red_flag"] = False
         accumulated_data["red_flag_reason"] = ""
     turn_count = int(session["turn_count"]) + 1
-    complete = turn_count >= 20 or _next_missing_field(accumulated_data, session["department"]) is None
+    clarification_required = bool(conflict and not red_flag)
+    complete = not clarification_required and (
+        turn_count >= 20 or _next_missing_field(accumulated_data, session["department"]) is None
+    )
     accumulated_data["interview_complete"] = complete
-    reply = _patient_reply(accumulated_data, session["department"], session["language"], complete, red_flag)
+    model_reply = result.get("reply", "")
+    asked_field = result.get("asked_field")
+    expected_field = _next_missing_field(accumulated_data, session["department"])
+    question_source = "server"
+    if not red_flag and not complete and not clarification_required:
+        if not _is_controlled_question(model_reply, asked_field, expected_field):
+            previous_reply = next(
+                (
+                    entry.get("content", "")
+                    for entry in reversed(transcript)
+                    if isinstance(entry, dict) and entry.get("role") == "assistant"
+                ),
+                "",
+            )
+            generated_reply = _generate_controlled_question(
+                expected_field, session["language"], request.message, previous_reply
+            )
+            if generated_reply:
+                model_reply = generated_reply
+                asked_field = expected_field
+        question_source = (
+            "model" if _is_controlled_question(model_reply, asked_field, expected_field) else "fallback"
+        )
+    reply = (
+        _conflict_reply(conflict[0], session["language"])
+        if clarification_required
+        else _patient_reply(
+            accumulated_data,
+            session["department"],
+            session["language"],
+            complete,
+            red_flag,
+            model_reply,
+            asked_field,
+        )
+    )
+    assistant_entry = {
+        "role": "assistant",
+        "content": reply,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if clarification_required:
+        assistant_entry["clarification_field"] = conflict[0]
     transcript.extend([
         {"role": "user", "content": request.message, "timestamp": datetime.now(timezone.utc).isoformat()},
-        {"role": "assistant", "content": reply, "timestamp": datetime.now(timezone.utc).isoformat()},
+        assistant_entry,
     ])
     accumulated_data = ClinicalData.model_validate(accumulated_data).model_dump()
     with _connect() as connection:
@@ -1883,7 +2173,13 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
         actor_id=session_id,
         session_id=session_id,
         patient_medi_id=session["patient_medi_id"],
-        details={"turn_count": turn_count, "interview_complete": complete, "red_flag": red_flag},
+        details={
+            "turn_count": turn_count,
+            "interview_complete": complete,
+            "red_flag": red_flag,
+            "clarification_required": clarification_required,
+            "question_source": question_source,
+        },
     )
     if llm_red_flag:
         _record_nurse_station_alert(
@@ -1899,7 +2195,11 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
         "red_flag": red_flag,
         "red_flag_reason": accumulated_data.get("red_flag_reason", ""),
         "red_flag_source": red_flag_source,
+        "retry_required": False,
+        "clarification_required": clarification_required,
+        "question_source": question_source,
         "data": accumulated_data,
+        "coverage": _coverage_state(accumulated_data, session["department"]),
         "turn_count": turn_count,
     }
 

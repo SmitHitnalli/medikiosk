@@ -155,21 +155,51 @@ class MediKioskRegressionTests(unittest.TestCase):
         )
         with patch.object(main, "_call_ollama", return_value=malformed):
             response = self.client.post("/chat", headers=headers, json={"session_id": session_id, "message": "hello"})
-        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["retry_required"])
 
         string_boolean = json.dumps(
             {"reply": "Next", "interview_complete": "false", "red_flag": "false", "data": {}}
         )
         with patch.object(main, "_call_ollama", return_value=string_boolean):
             response = self.client.post("/chat", headers=headers, json={"session_id": session_id, "message": "hello"})
-        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["retry_required"])
 
         wrong_data_shape = json.dumps(
             {"reply": "Next", "interview_complete": False, "red_flag": False, "data": "not-an-object"}
         )
         with patch.object(main, "_call_ollama", return_value=wrong_data_shape):
             response = self.client.post("/chat", headers=headers, json={"session_id": session_id, "message": "hello"})
-        self.assertEqual(response.status_code, 502, response.text)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["retry_required"])
+
+    def test_model_phrases_the_server_selected_question_naturally(self):
+        session_id, _, headers, _ = self.active_session()
+        natural_reply = "That sounds uncomfortable. Are you taking any medicines at the moment?"
+        valid = json.dumps({
+            "reply": natural_reply,
+            "interview_complete": False,
+            "red_flag": False,
+            "red_flag_reason": "",
+            "asked_field": "drug_allergy_history.current_medications",
+            "data": {"chief_complaint": "headache"},
+        })
+        with patch.object(main, "_call_ollama", return_value=valid):
+            response = self.client.post(
+                "/chat", headers=headers, json={"session_id": session_id, "message": "I have a headache"}
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["reply"], natural_reply)
+        self.assertEqual(response.json()["question_source"], "model")
+        self.assertEqual(response.json()["coverage"]["next_field"], "drug_allergy_history.current_medications")
+        self.assertFalse(response.json()["retry_required"])
+
+    def test_focused_extractor_repairs_a_missing_target_field(self):
+        with patch.object(main, "_call_ollama", return_value='{"answered": true, "value": "headache"}'):
+            self.assertEqual(main._extract_target_value("chief_complaint", "I have a headache"), "headache")
+        with patch.object(main, "_call_ollama", return_value='{"answered": true, "value": false}'):
+            self.assertIs(main._extract_target_value("personal_history.smoking", "I do not smoke"), False)
 
     def test_emergency_alert_survives_ollama_outage_and_restart_store(self):
         session_id, _, headers, _ = self.active_session()
@@ -210,9 +240,22 @@ class MediKioskRegressionTests(unittest.TestCase):
         self.assertEqual(value["hpi"], {"onset": "yesterday", "severity": "8/10"})
         self.assertEqual(value["drug_allergy_history"]["allergies"], ["penicillin"])
 
+    def test_contradictions_require_clarification_before_overwrite(self):
+        existing = main.ClinicalData(personal_history={"smoking": False}).model_dump()
+        incoming = main.ClinicalData(personal_history={"smoking": True}).model_dump()
+        conflict = main._find_clinical_conflict(existing, incoming, "Yes, I smoke")
+        self.assertEqual(conflict[0], "personal_history.smoking")
+        self.assertIsNone(
+            main._find_clinical_conflict(
+                existing, incoming, "Yes, I smoke", pending_field="personal_history.smoking"
+            )
+        )
+        self.assertIsNone(main._find_clinical_conflict(existing, incoming, "Actually, I do smoke"))
+
     def test_ayush_priority_and_hindi_emergency_rules(self):
         data = main.ClinicalData(chief_complaint="stomach pain").model_dump()
         self.assertEqual(main._next_missing_field(data, "Kayachikitsa"), "ayush_assessment.vikriti")
+        self.assertEqual(main._next_missing_field(data, "general"), "drug_allergy_history.current_medications")
         self.assertTrue(main.check_red_flags("मुझे सीने में दर्द और सांस लेने में तकलीफ है"))
         self.assertFalse(main.check_red_flags("My chest is fine and my breathing is normal."))
         self.assertTrue(main.check_red_flags("I am not sure why I have chest pain and breathlessness."))

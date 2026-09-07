@@ -23,8 +23,8 @@
   "family_history": ["string"],
   "personal_history": {
     "diet": "string",
-    "smoking": false,
-    "alcohol": false,
+    "smoking": "boolean | null",
+    "alcohol": "boolean | null",
     "occupation": "string"
   },
   "review_of_systems": {},
