@@ -123,7 +123,7 @@ CONTEXT YOU WILL RECEIVE WITH EACH REQUEST:
 
 - department: the department the patient selected (e.g. Kayachikitsa, Panchakarma, Shalya, Prasuti Tantra, or general)
 - returning_patient: true/false
-- known_prakriti: if returning_patient is true and this is filled in, DO NOT ask Prakriti questions again - acknowledge it naturally instead (e.g. "I see from your last visit that you have a Vata-Pitta constitution")
+- known_prakriti: a prior practitioner-confirmed value. It is context only; do not ask the patient to diagnose or reconfirm their own Prakriti.
 - patient_name: use it naturally in conversation, not on every single line
 
 AYUSH QUESTION PRIORITY - FOLLOW THIS FIRST:
@@ -132,12 +132,15 @@ When the department is anything other than "general", after the patient has stat
 MODE - AYUSH IS DEFAULT:
 Unless the department is explicitly "general", conduct an AYUSH-style interview. This means, in addition to the standard history, naturally weave in these questions using plain language (never raw Sanskrit terms unless the patient uses them first):
 
-- Body constitution (Prakriti) - ONLY if known_prakriti is not already provided: "How would you describe your body type generally - do you run warm or cold, are you naturally thin, medium, or heavier built?"
+- Prakriti is a practitioner assessment. Never infer or assign it from a patient's description.
 - Current imbalance (Vikriti) - always ask this fresh, every visit, regardless of returning patient status
 - Digestion pattern (Agni): "How would you describe your digestion - regular, variable, or sluggish?"
 - Bowel pattern (Koshtha): "What is your bowel movement pattern generally like?"
 - Causative factors (Nidana): "Have you noticed anything that seems to trigger or worsen this - stress, certain foods, weather, sleep?"
 - If relevant to their complaint, ask about prior Panchakarma treatments: "Have you undergone any Panchakarma therapies before, like Vamana, Virechana, or Basti?"
+
+DASHAVIDHA SEPARATION:
+Patient conversation may collect Satmya (adapted foods/habits), Sattva (mental resilience), Ahara Shakti (appetite/intake capacity), Vyayama Shakti (exercise tolerance), and Vaya (age/life stage). Sara, Samhanana, and Pramana require practitioner examination and must remain empty during the kiosk interview. The physician confirms Prakriti and examination-only Dashavidha fields later with their own authenticated account.
 
 If department is "general", skip all AYUSH-specific questions and conduct a standard history only.
 
@@ -160,7 +163,9 @@ Always nest fields exactly like this in the "data" object, never invent new fiel
 - data.hpi.site, data.hpi.onset, data.hpi.character, data.hpi.radiation, data.hpi.associated_symptoms, data.hpi.timing, data.hpi.exacerbating_relieving, data.hpi.severity
 - data.past_medical_history (array), data.past_surgical_history (array)
 - data.drug_allergy_history.current_medications (array), data.drug_allergy_history.allergies (array)
-- data.ayush_assessment.prakriti, data.ayush_assessment.vikriti, data.ayush_assessment.agni, data.ayush_assessment.koshtha, data.ayush_assessment.nidana, data.ayush_assessment.panchakarma_history
+- data.ayush_assessment.vikriti, data.ayush_assessment.agni, data.ayush_assessment.koshtha, data.ayush_assessment.nidana, data.ayush_assessment.panchakarma_history
+- data.ayush_assessment.dashavidha.patient_reported.satmya, sattva, ahara_shakti, vyayama_shakti, vaya
+- Never write prakriti, prakriti provenance, dashavidha.practitioner_exam, confirmation status, confirmed_by, or confirmed_at; these are server/practitioner-controlled.
 - For the ayush_assessment fields specifically, use correct Sanskrit terminology in the stored data (this is shown to the doctor, not spoken to the patient)
 
 Always respond in this exact JSON format:
@@ -202,9 +207,13 @@ class PatientRegistration(BaseModel):
     phone_number: str = Field(min_length=10, max_length=20)
 
 
-class PrakritiUpdate(BaseModel):
+class PractitionerAyushConfirmationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    prakriti: str | None = Field(default=None, max_length=100)
+    prakriti: str = Field(min_length=1, max_length=100)
+    sara: str = Field(default="", max_length=200)
+    samhanana: str = Field(default="", max_length=200)
+    pramana: str = Field(default="", max_length=200)
+    notes: str = Field(default="", max_length=1000)
 
 
 class StaffPinRequest(BaseModel):
@@ -263,14 +272,44 @@ class PersonalHistory(BaseModel):
     occupation: str = ""
 
 
+class DashavidhaPatientReported(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    satmya: str = ""
+    sattva: str = ""
+    ahara_shakti: str = ""
+    vyayama_shakti: str = ""
+    vaya: str = ""
+
+
+class DashavidhaPractitionerExam(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    sara: str = ""
+    samhanana: str = ""
+    pramana: str = ""
+    notes: str = ""
+
+
+class DashavidhaAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    patient_reported: DashavidhaPatientReported = Field(default_factory=DashavidhaPatientReported)
+    practitioner_exam: DashavidhaPractitionerExam = Field(default_factory=DashavidhaPractitionerExam)
+    status: Literal["patient_reported", "partially_confirmed", "practitioner_confirmed", ""] = ""
+    confirmed_by: str = ""
+    confirmed_at: str = ""
+
+
 class AyushAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     prakriti: str = ""
+    prakriti_source: Literal["prior_practitioner_record", "practitioner_confirmed", ""] = ""
+    prakriti_confirmed_by: str = ""
+    prakriti_confirmed_at: str = ""
     vikriti: str = ""
     agni: str = ""
     koshtha: str = ""
     nidana: str = ""
     panchakarma_history: str = ""
+    dashavidha: DashavidhaAssessment = Field(default_factory=DashavidhaAssessment)
 
 
 class ClinicalData(BaseModel):
@@ -993,6 +1032,7 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
     data = ClinicalData.model_validate(_json_load(session["clinical_data"], {})).model_dump()
     if row["prakriti"]:
         data["ayush_assessment"]["prakriti"] = row["prakriti"]
+        data["ayush_assessment"]["prakriti_source"] = "prior_practitioner_record"
     data["patient_id"] = row["medi_id"]
     with _connect() as connection:
         connection.execute(
@@ -1011,36 +1051,13 @@ def get_patient(medi_id: str, session: sqlite3.Row = Depends(_session_headers)) 
 
 
 @app.patch("/patients/{medi_id}/prakriti")
-def update_patient_prakriti(
+def reject_patient_prakriti_update(
     medi_id: str,
-    request: PrakritiUpdate,
     session: sqlite3.Row = Depends(_session_headers),
-) -> dict[str, str | None]:
+) -> dict:
     if session["patient_medi_id"] != medi_id:
         raise HTTPException(status_code=403, detail="This patient is not linked to the active session")
-    prakriti = request.prakriti.strip() if request.prakriti is not None else None
-    with _connect() as connection:
-        connection.row_factory = sqlite3.Row
-        cursor = connection.execute(
-            "UPDATE patients SET prakriti = ? WHERE medi_id = ?",
-            (prakriti or None, medi_id),
-        )
-        if cursor.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Patient not found")
-        connection.commit()
-        row = connection.execute(
-            "SELECT medi_id, name, phone_number, prakriti, created_at FROM patients WHERE medi_id = ?",
-            (medi_id,),
-        ).fetchone()
-    _write_audit_event(
-        "patient.prakriti.updated",
-        actor_type="patient_session",
-        actor_id=session["session_id"],
-        session_id=session["session_id"],
-        patient_medi_id=medi_id,
-        details={"value_present": bool(prakriti)},
-    )
-    return _patient_response(row)
+    raise HTTPException(status_code=403, detail="Prakriti must be confirmed by an authenticated practitioner")
 
 
 def _get_whisper_model():
@@ -1716,12 +1733,16 @@ FIELD_PROMPTS = {
     "personal_history.alcohol": "alcohol use",
     "personal_history.occupation": "their occupation",
     "review_of_systems": "any other symptoms not already discussed",
-    "ayush_assessment.prakriti": "their usual body constitution",
     "ayush_assessment.vikriti": "their current imbalance, or how their health feels different from usual",
     "ayush_assessment.agni": "their digestion pattern - regular, variable, or sluggish",
     "ayush_assessment.koshtha": "their usual bowel movement pattern",
     "ayush_assessment.nidana": "anything that triggers or worsens the problem, such as stress, food, weather, or sleep",
     "ayush_assessment.panchakarma_history": "whether they have undergone Panchakarma therapies before",
+    "ayush_assessment.dashavidha.patient_reported.satmya": "foods and routines that suit them well or cause difficulty",
+    "ayush_assessment.dashavidha.patient_reported.sattva": "how they usually cope with stress and emotional strain",
+    "ayush_assessment.dashavidha.patient_reported.ahara_shakti": "their appetite and ability to comfortably eat a normal meal",
+    "ayush_assessment.dashavidha.patient_reported.vyayama_shakti": "their usual exercise tolerance before fatigue",
+    "ayush_assessment.dashavidha.patient_reported.vaya": "their age or stage of life",
 }
 
 FIELD_QUESTIONS = {
@@ -1745,12 +1766,16 @@ FIELD_QUESTIONS = {
         "personal_history.alcohol": "Do you drink alcohol?",
         "personal_history.occupation": "What work do you do?",
         "review_of_systems": "Is there any other symptom we have not discussed?",
-        "ayush_assessment.prakriti": "Are you usually warm or cold, and naturally thin, medium, or heavier built?",
         "ayush_assessment.vikriti": "How does your health feel different from usual right now?",
         "ayush_assessment.agni": "Is your digestion usually regular, variable, or sluggish?",
         "ayush_assessment.koshtha": "What is your usual bowel movement pattern?",
         "ayush_assessment.nidana": "Have you noticed triggers such as stress, food, weather, or sleep?",
         "ayush_assessment.panchakarma_history": "Have you had Panchakarma therapies before?",
+        "ayush_assessment.dashavidha.patient_reported.satmya": "Which foods or daily habits usually suit you well, and which do not?",
+        "ayush_assessment.dashavidha.patient_reported.sattva": "How do you usually cope when you are under stress?",
+        "ayush_assessment.dashavidha.patient_reported.ahara_shakti": "How is your appetite, and can you comfortably finish a normal meal?",
+        "ayush_assessment.dashavidha.patient_reported.vyayama_shakti": "How much physical activity can you usually do before feeling tired?",
+        "ayush_assessment.dashavidha.patient_reported.vaya": "How old are you?",
     },
     "hi": {
         "chief_complaint": "आज आप किस परेशानी के लिए आए हैं?",
@@ -1772,12 +1797,16 @@ FIELD_QUESTIONS = {
         "personal_history.alcohol": "क्या आप शराब पीते हैं?",
         "personal_history.occupation": "आप क्या काम करते हैं?",
         "review_of_systems": "क्या कोई और लक्षण है जिसकी हमने बात नहीं की?",
-        "ayush_assessment.prakriti": "आपको सामान्यतः गर्मी या ठंड अधिक लगती है, और शरीर दुबला, मध्यम या भारी है?",
         "ayush_assessment.vikriti": "अभी आपका स्वास्थ्य सामान्य से किस तरह अलग लग रहा है?",
         "ayush_assessment.agni": "आपका पाचन सामान्यतः नियमित, बदलता हुआ या धीमा रहता है?",
         "ayush_assessment.koshtha": "आपका सामान्य मल त्याग कैसा रहता है?",
         "ayush_assessment.nidana": "क्या तनाव, भोजन, मौसम या नींद से यह बढ़ती है?",
         "ayush_assessment.panchakarma_history": "क्या आपने पहले पंचकर्म चिकित्सा कराई है?",
+        "ayush_assessment.dashavidha.patient_reported.satmya": "कौन से भोजन या दिनचर्या आपको अनुकूल लगते हैं और कौन से नहीं?",
+        "ayush_assessment.dashavidha.patient_reported.sattva": "तनाव के समय आप सामान्यतः कैसे संभालते हैं?",
+        "ayush_assessment.dashavidha.patient_reported.ahara_shakti": "आपकी भूख कैसी रहती है, और क्या आप सामान्य भोजन आराम से पूरा कर पाते हैं?",
+        "ayush_assessment.dashavidha.patient_reported.vyayama_shakti": "थकान होने से पहले आप सामान्यतः कितना शारीरिक काम कर पाते हैं?",
+        "ayush_assessment.dashavidha.patient_reported.vaya": "आपकी उम्र कितनी है?",
     },
 }
 
@@ -1808,23 +1837,26 @@ def _required_fields(data: dict, department: str | None) -> list[str]:
         "hpi.exacerbating_relieving",
         "hpi.severity",
         "past_medical_history",
-        "past_surgical_history",
-        "family_history",
-        "personal_history.diet",
-        "personal_history.smoking",
-        "personal_history.alcohol",
-        "personal_history.occupation",
-        "review_of_systems",
     ])
-    if is_ayush:
-        if _value_is_empty(_get_nested_value(data, "ayush_assessment.prakriti")):
-            fields.append("ayush_assessment.prakriti")
+    if not is_ayush:
         fields.extend([
-            "ayush_assessment.koshtha",
-            "ayush_assessment.nidana",
+            "past_surgical_history",
+            "family_history",
+            "personal_history.diet",
+            "personal_history.smoking",
+            "personal_history.alcohol",
+            "personal_history.occupation",
+            "review_of_systems",
         ])
-        if (department or "").strip().lower() == "panchakarma":
-            fields.append("ayush_assessment.panchakarma_history")
+    else:
+        fields.extend([
+            "ayush_assessment.nidana",
+            "ayush_assessment.dashavidha.patient_reported.satmya",
+            "ayush_assessment.dashavidha.patient_reported.sattva",
+            "ayush_assessment.dashavidha.patient_reported.ahara_shakti",
+            "ayush_assessment.dashavidha.patient_reported.vyayama_shakti",
+            "ayush_assessment.dashavidha.patient_reported.vaya",
+        ])
 
     return fields
 
@@ -2115,6 +2147,16 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
         "red_flag", "red_flag_reason", "consent", "status", "interview_complete",
     ):
         incoming_data.pop(server_field, None)
+    incoming_ayush = incoming_data.get("ayush_assessment")
+    if isinstance(incoming_ayush, dict):
+        for controlled_field in (
+            "prakriti", "prakriti_source", "prakriti_confirmed_by", "prakriti_confirmed_at"
+        ):
+            incoming_ayush.pop(controlled_field, None)
+        incoming_dashavidha = incoming_ayush.get("dashavidha")
+        if isinstance(incoming_dashavidha, dict):
+            for controlled_field in ("practitioner_exam", "status", "confirmed_by", "confirmed_at"):
+                incoming_dashavidha.pop(controlled_field, None)
     if target_before_turn and _value_is_empty(_get_nested_value(incoming_data, target_before_turn)):
         repaired_value = _extract_target_value(target_before_turn, request.message)
         if repaired_value is not None:
@@ -2128,6 +2170,14 @@ def chat(request: ChatRequest, x_session_token: str | None = Header(default=None
     if conflict:
         _remove_nested_value(incoming_data, conflict[0])
     _merge_accumulated_data(accumulated_data, incoming_data)
+    dashavidha = accumulated_data.get("ayush_assessment", {}).get("dashavidha", {})
+    patient_reported_dashavidha = dashavidha.get("patient_reported", {}) if isinstance(dashavidha, dict) else {}
+    if (
+        isinstance(patient_reported_dashavidha, dict)
+        and any(not _value_is_empty(value) for value in patient_reported_dashavidha.values())
+        and dashavidha.get("status") not in {"partially_confirmed", "practitioner_confirmed"}
+    ):
+        dashavidha["status"] = "patient_reported"
     accumulated_data["patient_id"] = session["patient_medi_id"] or ""
     accumulated_data["session_id"] = session_id
     accumulated_data["language"] = session["language"]
@@ -2626,6 +2676,71 @@ def get_staff_session(
         patient_medi_id=row["patient_medi_id"],
     )
     return _staff_session_payload(row)
+
+
+@app.patch("/staff/sessions/{session_id}/ayush-confirmation")
+def confirm_ayush_assessment(
+    session_id: str,
+    request: PractitionerAyushConfirmationRequest,
+    staff: dict[str, str] = Depends(require_roles("doctor", "admin")),
+) -> dict:
+    with _connect() as connection:
+        row = connection.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Clinical session not found")
+        if (row["department"] or "general").strip().lower() == "general":
+            raise HTTPException(status_code=409, detail="AYUSH confirmation is only available for Ayurveda departments")
+        data = ClinicalData.model_validate(_json_load(row["clinical_data"], {})).model_dump()
+        now = datetime.now(timezone.utc).isoformat()
+        ayush = data["ayush_assessment"]
+        ayush["prakriti"] = request.prakriti.strip()
+        ayush["prakriti_source"] = "practitioner_confirmed"
+        ayush["prakriti_confirmed_by"] = staff["display_name"]
+        ayush["prakriti_confirmed_at"] = now
+        practitioner_exam = ayush["dashavidha"]["practitioner_exam"]
+        practitioner_exam.update({
+            "sara": request.sara.strip(),
+            "samhanana": request.samhanana.strip(),
+            "pramana": request.pramana.strip(),
+            "notes": request.notes.strip(),
+        })
+        completed_exam = all(practitioner_exam[field] for field in ("sara", "samhanana", "pramana"))
+        patient_reported = ayush["dashavidha"]["patient_reported"]
+        complete_dashavidha = (
+            completed_exam
+            and bool(ayush["prakriti"])
+            and bool(ayush["vikriti"])
+            and all(patient_reported[field] for field in ("satmya", "sattva", "ahara_shakti", "vyayama_shakti", "vaya"))
+        )
+        ayush["dashavidha"]["status"] = "practitioner_confirmed" if complete_dashavidha else "partially_confirmed"
+        ayush["dashavidha"]["confirmed_by"] = staff["display_name"]
+        ayush["dashavidha"]["confirmed_at"] = now
+        data = ClinicalData.model_validate(data).model_dump()
+        connection.execute(
+            "UPDATE sessions SET clinical_data = ?, updated_at = ? WHERE session_id = ?",
+            (json.dumps(data), now, session_id),
+        )
+        connection.execute(
+            "UPDATE patients SET prakriti = ? WHERE medi_id = ?",
+            (ayush["prakriti"], row["patient_medi_id"]),
+        )
+        connection.commit()
+    _write_audit_event(
+        "clinical.ayush.confirmed",
+        actor_type="staff",
+        actor_id=staff["user_id"],
+        actor_role=staff["role"],
+        session_id=session_id,
+        patient_medi_id=row["patient_medi_id"],
+        details={"dashavidha_status": ayush["dashavidha"]["status"]},
+    )
+    return {
+        "data": data,
+        "prakriti": ayush["prakriti"],
+        "dashavidha_status": ayush["dashavidha"]["status"],
+        "confirmed_by": staff["display_name"],
+        "confirmed_at": now,
+    }
 
 
 @app.get("/staff/audit")

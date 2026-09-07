@@ -283,10 +283,57 @@ class MediKioskRegressionTests(unittest.TestCase):
     def test_ayush_priority_and_hindi_emergency_rules(self):
         data = main.ClinicalData(chief_complaint="stomach pain").model_dump()
         self.assertEqual(main._next_missing_field(data, "Kayachikitsa"), "ayush_assessment.vikriti")
+        ayurveda_fields = main._required_fields(data, "Kayachikitsa")
+        self.assertEqual(len(ayurveda_fields), 20)
+        self.assertNotIn("ayush_assessment.prakriti", ayurveda_fields)
+        self.assertIn("ayush_assessment.dashavidha.patient_reported.satmya", ayurveda_fields)
         self.assertEqual(main._next_missing_field(data, "general"), "drug_allergy_history.current_medications")
         self.assertTrue(main.check_red_flags("मुझे सीने में दर्द और सांस लेने में तकलीफ है"))
         self.assertFalse(main.check_red_flags("My chest is fine and my breathing is normal."))
         self.assertTrue(main.check_red_flags("I am not sure why I have chest pain and breathlessness."))
+
+    def test_practitioner_confirms_prakriti_and_exam_only_dashavidha(self):
+        session_id, _, patient_headers, medi_id = self.active_session("Kayachikitsa")
+        self.assertEqual(
+            self.client.patch(f"/patients/{medi_id}/prakriti", headers=patient_headers).status_code,
+            403,
+        )
+        confirmation = {
+            "prakriti": "Vata-Pitta",
+            "sara": "Madhyama",
+            "samhanana": "Madhyama",
+            "pramana": "Sama",
+            "notes": "Confirmed after direct examination.",
+        }
+        nurse = self.staff_headers("nurse1", "1357")
+        self.assertEqual(
+            self.client.patch(
+                f"/staff/sessions/{session_id}/ayush-confirmation", headers=nurse, json=confirmation
+            ).status_code,
+            403,
+        )
+        response = self.client.patch(
+            f"/staff/sessions/{session_id}/ayush-confirmation",
+            headers=self.staff_headers(),
+            json=confirmation,
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        ayush = response.json()["data"]["ayush_assessment"]
+        self.assertEqual(ayush["prakriti_source"], "practitioner_confirmed")
+        self.assertEqual(ayush["dashavidha"]["status"], "partially_confirmed")
+        self.assertEqual(ayush["dashavidha"]["practitioner_exam"]["sara"], "Madhyama")
+
+        _, _, lookup_headers = self.start_session()
+        lookup = self.client.get(f"/patients/{medi_id}", headers=lookup_headers)
+        self.assertEqual(lookup.status_code, 200, lookup.text)
+        restored = self.client.get(
+            f"/sessions/{lookup_headers['X-Session-Id']}", headers=lookup_headers
+        ).json()
+        self.assertEqual(restored["data"]["ayush_assessment"]["prakriti"], "Vata-Pitta")
+        self.assertEqual(
+            restored["data"]["ayush_assessment"]["prakriti_source"],
+            "prior_practitioner_record",
+        )
 
     def test_export_rejects_missing_session_and_keeps_lab_metadata(self):
         staff = self.staff_headers()

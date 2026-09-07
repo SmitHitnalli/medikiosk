@@ -26,6 +26,7 @@ const CORE_FIELDS = [
   ["hpi.site", "Symptom site"],
   ["hpi.onset", "Onset"],
   ["hpi.character", "Character"],
+  ["hpi.radiation", "Radiation"],
   ["hpi.associated_symptoms", "Associated symptoms"],
   ["hpi.timing", "Timing"],
   ["hpi.exacerbating_relieving", "Exacerbating / relieving factors"],
@@ -42,12 +43,19 @@ const CORE_FIELDS = [
   ["review_of_systems", "Other symptoms review"],
 ];
 const AYUSH_FIELDS = [
-  ["ayush_assessment.prakriti", "Prakriti (constitution)"],
   ["ayush_assessment.vikriti", "Vikriti (current imbalance)"],
   ["ayush_assessment.agni", "Agni (digestion pattern)"],
-  ["ayush_assessment.koshtha", "Koshtha (bowel pattern)"],
   ["ayush_assessment.nidana", "Nidana (causative factors)"],
+  ["ayush_assessment.dashavidha.patient_reported.satmya", "Satmya"],
+  ["ayush_assessment.dashavidha.patient_reported.sattva", "Sattva"],
+  ["ayush_assessment.dashavidha.patient_reported.ahara_shakti", "Ahara Shakti"],
+  ["ayush_assessment.dashavidha.patient_reported.vyayama_shakti", "Vyayama Shakti"],
+  ["ayush_assessment.dashavidha.patient_reported.vaya", "Vaya"],
 ];
+const AYURVEDA_OPTIONAL_CORE = new Set([
+  "past_surgical_history", "family_history", "personal_history.diet", "personal_history.smoking",
+  "personal_history.alcohol", "personal_history.occupation", "review_of_systems",
+]);
 const RED_FLAG_SOURCE_LABELS = {
   keyword: "Deterministic rule",
   ai: "AI model",
@@ -116,12 +124,15 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   const hpi = patient.hpi || {};
   const drugHistory = patient.drug_allergy_history || {};
   const ayush = patient.ayush_assessment || {};
-  const hasAyushData = Object.values(ayush).some((value) => normaliseItems(value).length > 0);
+  const dashavidha = ayush.dashavidha || {};
+  const patientDashavidha = dashavidha.patient_reported || {};
+  const practitionerDashavidha = dashavidha.practitioner_exam || {};
   const hasPatientData = Boolean(patientData);
   const normalizedDepartment = (department || "general").trim().toLowerCase();
+  const hasAyushData = normalizedDepartment !== "general";
   const trackedFields = normalizedDepartment === "general"
     ? CORE_FIELDS
-    : [...CORE_FIELDS, ...AYUSH_FIELDS, ...(normalizedDepartment === "panchakarma" ? [["ayush_assessment.panchakarma_history", "Panchakarma history"]] : [])];
+    : [...CORE_FIELDS.filter(([path]) => !AYURVEDA_OPTIONAL_CORE.has(path)), ...AYUSH_FIELDS];
   const filledFields = trackedFields.filter(([path]) => isFieldFilled(getNestedValue(patient, path)));
   const missingFields = trackedFields.filter(([path]) => !isFieldFilled(getNestedValue(patient, path)));
   const completenessPct = trackedFields.length ? Math.round((filledFields.length / trackedFields.length) * 100) : 0;
@@ -140,7 +151,22 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   const [pushError, setPushError] = useState("");
   const [showBundle, setShowBundle] = useState(false);
   const [recentSessions, setRecentSessions] = useState([]);
+  const [ayushConfirmation, setAyushConfirmation] = useState({ prakriti: "", sara: "", samhanana: "", pramana: "", notes: "" });
+  const [ayushSaveState, setAyushSaveState] = useState("idle");
+  const [ayushSaveMessage, setAyushSaveMessage] = useState("");
   const speechRequestRef = useRef(null);
+
+  useEffect(() => {
+    setAyushConfirmation({
+      prakriti: ayush.prakriti || "",
+      sara: practitionerDashavidha.sara || "",
+      samhanana: practitionerDashavidha.samhanana || "",
+      pramana: practitionerDashavidha.pramana || "",
+      notes: practitionerDashavidha.notes || "",
+    });
+    setAyushSaveState("idle");
+    setAyushSaveMessage("");
+  }, [sessionId, ayush.prakriti, practitionerDashavidha.sara, practitionerDashavidha.samhanana, practitionerDashavidha.pramana, practitionerDashavidha.notes]);
 
   // Hydrate any prior mock ABDM push for this session, so re-opening the
   // dashboard (or the physician navigating away and back) still shows it was
@@ -231,6 +257,29 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
       }
     } finally {
       if (speechRequestRef.current === controller) speechRequestRef.current = null;
+    }
+  }
+
+  async function saveAyushConfirmation(event) {
+    event.preventDefault();
+    if (!sessionId || !ayushConfirmation.prakriti.trim()) return;
+    setAyushSaveState("saving");
+    setAyushSaveMessage("");
+    try {
+      const response = await apiFetch(`/staff/sessions/${encodeURIComponent(sessionId)}/ayush-confirmation`, {
+        method: "PATCH",
+        headers: staffHeaders(staffToken, true),
+        body: JSON.stringify(ayushConfirmation),
+      }, 10000);
+      if (response.status === 401) return onSessionExpired();
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "Could not save the Ayurveda assessment.");
+      setAyushSaveState("saved");
+      setAyushSaveMessage(`Saved as ${result.dashavidha_status.replaceAll("_", " ")} by ${result.confirmed_by}.`);
+      await onLoadSession(sessionId);
+    } catch (error) {
+      setAyushSaveState("error");
+      setAyushSaveMessage(error.message || "Could not save the Ayurveda assessment.");
     }
   }
 
@@ -337,15 +386,38 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
 
         {hasAyushData && (
           <section className="dashboard-card ayush-card">
-            <div className="card-heading"><div><p className="section-kicker">AYUSH assessment</p><h2>Constitution & patterns</h2></div><span className="ayush-badge">AYUSH</span></div>
+            <div className="card-heading"><div><p className="section-kicker">Ayurveda assessment</p><h2>Patient history and practitioner examination</h2></div><span className="ayush-badge">AYURVEDA</span></div>
             <dl className="detail-grid ayush-grid">
-              <div className="detail-item"><dt>Prakriti</dt><dd><SafeValue value={ayush.prakriti} /></dd></div>
+              <div className="detail-item"><dt>Prakriti</dt><dd><SafeValue value={ayush.prakriti} /><small>{ayush.prakriti_source ? `Source: ${ayush.prakriti_source.replaceAll("_", " ")}` : "Awaiting practitioner confirmation"}</small></dd></div>
               <div className="detail-item"><dt>Vikriti</dt><dd><SafeValue value={ayush.vikriti} /></dd></div>
               <div className="detail-item"><dt>Agni</dt><dd><SafeValue value={ayush.agni} /></dd></div>
               <div className="detail-item"><dt>Koshtha</dt><dd><SafeValue value={ayush.koshtha} /></dd></div>
               <div className="detail-item detail-item-wide"><dt>Nidana</dt><dd><SafeValue value={ayush.nidana} /></dd></div>
               <div className="detail-item detail-item-wide"><dt>Panchakarma history</dt><dd><SafeValue value={ayush.panchakarma_history} /></dd></div>
             </dl>
+            <h3 className="ayush-subheading">Dashavidha: patient-reported factors</h3>
+            <dl className="detail-grid ayush-grid">
+              <div className="detail-item"><dt>Satmya</dt><dd><SafeValue value={patientDashavidha.satmya} /></dd></div>
+              <div className="detail-item"><dt>Sattva</dt><dd><SafeValue value={patientDashavidha.sattva} /></dd></div>
+              <div className="detail-item"><dt>Ahara Shakti</dt><dd><SafeValue value={patientDashavidha.ahara_shakti} /></dd></div>
+              <div className="detail-item"><dt>Vyayama Shakti</dt><dd><SafeValue value={patientDashavidha.vyayama_shakti} /></dd></div>
+              <div className="detail-item"><dt>Vaya</dt><dd><SafeValue value={patientDashavidha.vaya} /></dd></div>
+            </dl>
+            <form className="ayush-confirmation-form" onSubmit={saveAyushConfirmation}>
+              <div>
+                <p className="section-kicker">Practitioner-only confirmation</p>
+                <h3>Confirm Prakriti and examination factors</h3>
+                <p className="trust-metric-note">Sara, Samhanana, and Pramana require direct examination. The kiosk never fills them from patient speech.</p>
+              </div>
+              <label>Confirmed Prakriti<input value={ayushConfirmation.prakriti} onChange={(event) => setAyushConfirmation((current) => ({ ...current, prakriti: event.target.value }))} required /></label>
+              <label>Sara<input value={ayushConfirmation.sara} onChange={(event) => setAyushConfirmation((current) => ({ ...current, sara: event.target.value }))} /></label>
+              <label>Samhanana<input value={ayushConfirmation.samhanana} onChange={(event) => setAyushConfirmation((current) => ({ ...current, samhanana: event.target.value }))} /></label>
+              <label>Pramana<input value={ayushConfirmation.pramana} onChange={(event) => setAyushConfirmation((current) => ({ ...current, pramana: event.target.value }))} /></label>
+              <label className="ayush-notes-field">Examination notes<textarea value={ayushConfirmation.notes} onChange={(event) => setAyushConfirmation((current) => ({ ...current, notes: event.target.value }))} rows="3" /></label>
+              <button className="play-summary-button" type="submit" disabled={ayushSaveState === "saving" || !ayushConfirmation.prakriti.trim()}>{ayushSaveState === "saving" ? "Saving..." : "Save practitioner confirmation"}</button>
+              {ayushSaveMessage && <p className={ayushSaveState === "error" ? "speech-error" : "abdm-push-status"} role={ayushSaveState === "error" ? "alert" : undefined}>{ayushSaveMessage}</p>}
+              {dashavidha.confirmed_by && <p className="trust-metric-note">Last confirmed by {dashavidha.confirmed_by} · {formatEventTime(dashavidha.confirmed_at)}</p>}
+            </form>
           </section>
         )}
 

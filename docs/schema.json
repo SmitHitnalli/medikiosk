@@ -30,11 +30,32 @@
   "review_of_systems": {},
   "ayush_assessment": {
     "prakriti": "string",
+    "prakriti_source": "prior_practitioner_record | practitioner_confirmed | empty",
+    "prakriti_confirmed_by": "string",
+    "prakriti_confirmed_at": "ISO-8601 timestamp string",
     "vikriti": "string",
     "agni": "string",
     "koshtha": "string",
     "nidana": "string",
-    "panchakarma_history": "string"
+    "panchakarma_history": "string",
+    "dashavidha": {
+      "patient_reported": {
+        "satmya": "string",
+        "sattva": "string",
+        "ahara_shakti": "string",
+        "vyayama_shakti": "string",
+        "vaya": "string"
+      },
+      "practitioner_exam": {
+        "sara": "string",
+        "samhanana": "string",
+        "pramana": "string",
+        "notes": "string"
+      },
+      "status": "patient_reported | partially_confirmed | practitioner_confirmed | empty",
+      "confirmed_by": "string",
+      "confirmed_at": "ISO-8601 timestamp string"
+    }
   },
   "digitized_documents": [
     {

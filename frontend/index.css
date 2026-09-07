@@ -149,6 +149,13 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", sans-serif; font-s
 .card-heading h2 { margin: 0; color: #173b3c; font-family: "Space Grotesk", sans-serif; font-size: 20px; }
 .framework-badge { margin: 0; color: #0f766e; background: #e4f3ec; }
 .ayush-badge { margin: 0; color: #8a5b18; background: #f9edd0; }
+.ayush-subheading { margin: 24px 0 12px; font-size: 16px; }
+.ayush-confirmation-form { margin-top: 24px; padding-top: 22px; border-top: 1px solid #dce8e3; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.ayush-confirmation-form > div, .ayush-confirmation-form .ayush-notes-field, .ayush-confirmation-form button, .ayush-confirmation-form > p { grid-column: 1 / -1; }
+.ayush-confirmation-form label { display: grid; gap: 7px; color: #31534a; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.ayush-confirmation-form input, .ayush-confirmation-form textarea { width: 100%; border: 1px solid #c8dcd5; border-radius: 10px; padding: 12px; background: #fff; color: #153f37; font: inherit; font-size: 15px; text-transform: none; }
+.ayush-confirmation-form textarea { resize: vertical; }
+@media (max-width: 720px) { .ayush-confirmation-form { grid-template-columns: 1fr; } }
 .card-icon { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 9px; color: #0f766e; background: #e5f4ee; font-size: 14px; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 24px; margin: 0; }
 .detail-item dt, .stacked-detail dt { margin-bottom: 5px; color: #78908a; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }

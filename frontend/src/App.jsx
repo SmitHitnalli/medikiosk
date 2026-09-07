@@ -418,12 +418,6 @@ function App() {
             : [...current, { reason, source: result.red_flag_source, timestamp: new Date().toISOString() }]);
         }
       }
-      const prakriti = result.data?.ayush_assessment?.prakriti;
-      if (prakriti && patientInfo?.medi_id) {
-        void apiFetch(`/patients/${encodeURIComponent(patientInfo.medi_id)}/prakriti`, {
-          method: "PATCH", headers: patientHeaders(currentId, currentToken, true), body: JSON.stringify({ prakriti }),
-        }, 10000).catch(() => {});
-      }
       void speakAssistant(result.reply, generation);
     } catch (requestError) {
       if (requestError.name !== "AbortError" && generation === requestGenerationRef.current) setError(requestError.message || "Unable to reach the backend.");
