@@ -146,6 +146,7 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
     try {
       const formData = new FormData();
       formData.append("file", blob, `patient-${field}.webm`);
+      formData.append("language", language || "en");
       const response = await apiFetch("/transcribe", { method: "POST", body: formData, signal: controller.signal });
       const result = await response.json();
       if (!activeRef.current || controller.signal.aborted) return;

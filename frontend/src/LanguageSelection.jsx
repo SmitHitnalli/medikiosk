@@ -102,6 +102,7 @@ function LanguageSelection({ onSelect, onBack }) {
     try {
       const formData = new FormData();
       formData.append("file", blob, "language-choice.webm");
+      formData.append("provider", "local");
       const response = await apiFetch("/transcribe", { method: "POST", body: formData, signal: controller.signal });
       const result = await response.json();
       if (!activeRef.current || controller.signal.aborted) return;

@@ -441,6 +441,7 @@ function App() {
     try {
       const formData = new FormData();
       formData.append("file", blob, "patient-recording.webm");
+      formData.append("language", language || "en");
       const response = await apiFetch("/transcribe", { method: "POST", body: formData, signal: controller.signal });
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || "The audio could not be transcribed.");

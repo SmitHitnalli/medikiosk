@@ -28,6 +28,15 @@ from starlette.responses import FileResponse
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from PIL import Image
+from speech_providers import (
+    SpeechProviderError,
+    provider_status,
+    selected_provider,
+    synthesize_ai4bharat,
+    synthesize_bhashini,
+    transcribe_ai4bharat,
+    transcribe_bhashini,
+)
 
 load_dotenv()
 
@@ -184,6 +193,7 @@ class SpeakRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(min_length=1, max_length=MAX_SPEAK_CHARS)
     language: Literal["en", "hi"] | None = None
+    provider: Literal["auto", "local", "bhashini", "ai4bharat"] = "auto"
 
 
 class PatientRegistration(BaseModel):
@@ -593,7 +603,7 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict:
     # Reports the backend process itself (always "ok" if this handler runs) plus a
     # quick, short-timeout reachability probe of Ollama, since "the FastAPI process
     # is alive" and "the AI assistant actually works" are different failure modes a
@@ -610,7 +620,11 @@ def health() -> dict[str, str]:
             )
     except Exception:
         ollama_ok = False
-    return {"status": "ok", "ollama": "ok" if ollama_ok else "unreachable"}
+    return {
+        "status": "ok",
+        "ollama": "ok" if ollama_ok else "unreachable",
+        "speech": provider_status(),
+    }
 
 
 @app.post("/staff/login")
@@ -1068,7 +1082,11 @@ def _transcribe_bytes(audio_data: bytes, suffix: str) -> str:
 
 
 @app.post("/transcribe")
-async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
+async def transcribe(
+    file: UploadFile = File(...),
+    language: Literal["en", "hi"] = Form(default="en"),
+    provider: Literal["auto", "local", "bhashini", "ai4bharat"] = Form(default="auto"),
+) -> dict:
     try:
         audio_data = await _read_upload(
             file,
@@ -1077,8 +1095,23 @@ async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
         suffix = Path(file.filename or "audio.webm").suffix or ".webm"
         if suffix.lower() not in {".webm", ".wav", ".mp3", ".m4a", ".mp4", ".ogg"}:
             raise HTTPException(status_code=415, detail="Unsupported audio file extension")
-        text = await run_in_threadpool(_transcribe_bytes, audio_data, suffix)
-        return {"text": text}
+        requested_provider = selected_provider(provider)
+        used_provider = requested_provider
+        fallback_from = None
+        try:
+            if requested_provider == "bhashini":
+                text = await run_in_threadpool(
+                    transcribe_bhashini, audio_data, language, suffix.lower().lstrip(".")
+                )
+            elif requested_provider == "ai4bharat":
+                text = await run_in_threadpool(transcribe_ai4bharat, audio_data, language)
+            else:
+                text = await run_in_threadpool(_transcribe_bytes, audio_data, suffix)
+        except SpeechProviderError:
+            fallback_from = requested_provider
+            used_provider = "local"
+            text = await run_in_threadpool(_transcribe_bytes, audio_data, suffix)
+        return {"text": text, "provider": used_provider, "fallback_from": fallback_from}
     except HTTPException:
         raise
     except ImportError as exc:
@@ -1322,15 +1355,36 @@ def speak(request: SpeakRequest) -> FileResponse:
 
     temp_path = None
     try:
-        voice = _get_piper_voice(request.language)
+        requested_provider = selected_provider(request.provider)
+        used_provider = requested_provider
+        fallback_from = None
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_file:
             temp_path = temp_file.name
-        with wave.open(temp_path, "wb") as wav_file:
-            voice.synthesize_wav(text, wav_file)
+        try:
+            if requested_provider == "bhashini":
+                audio_data = synthesize_bhashini(text, request.language or "en")
+                Path(temp_path).write_bytes(audio_data)
+            elif requested_provider == "ai4bharat":
+                audio_data = synthesize_ai4bharat(text, request.language or "en")
+                Path(temp_path).write_bytes(audio_data)
+            else:
+                voice = _get_piper_voice(request.language)
+                with wave.open(temp_path, "wb") as wav_file:
+                    voice.synthesize_wav(text, wav_file)
+        except SpeechProviderError:
+            fallback_from = requested_provider
+            used_provider = "local"
+            voice = _get_piper_voice(request.language)
+            with wave.open(temp_path, "wb") as wav_file:
+                voice.synthesize_wav(text, wav_file)
         response = FileResponse(
             temp_path,
             media_type="audio/wav",
             filename="medikiosk-summary.wav",
+            headers={
+                "X-Speech-Provider": used_provider,
+                "X-Speech-Fallback": fallback_from or "",
+            },
             background=BackgroundTask(os.remove, temp_path),
         )
         temp_path = None

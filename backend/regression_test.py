@@ -24,6 +24,7 @@ from fastapi import HTTPException  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 import main  # noqa: E402
+import speech_providers as speech  # noqa: E402
 
 
 class MediKioskRegressionTests(unittest.TestCase):
@@ -200,6 +201,33 @@ class MediKioskRegressionTests(unittest.TestCase):
             self.assertEqual(main._extract_target_value("chief_complaint", "I have a headache"), "headache")
         with patch.object(main, "_call_ollama", return_value='{"answered": true, "value": false}'):
             self.assertIs(main._extract_target_value("personal_history.smoking", "I do not smoke"), False)
+
+    def test_bhashini_and_ai4bharat_provider_contracts(self):
+        bhashini_env = {
+            "BHASHINI_COMPUTE_URL": "https://speech.example/compute",
+            "BHASHINI_AUTH_NAME": "X-Api-Key",
+            "BHASHINI_AUTH_VALUE": "test-key",
+            "BHASHINI_ASR_SERVICE_ID": "asr-test",
+            "BHASHINI_TTS_SERVICE_ID": "tts-test",
+        }
+        bhashini_result = {"pipelineResponse": [{"output": [{"source": "नमस्ते"}]}]}
+        with patch.dict(os.environ, bhashini_env, clear=False), patch.object(
+            speech, "_post_json", return_value=bhashini_result
+        ) as request:
+            self.assertEqual(speech.transcribe_bhashini(b"audio", "hi", "wav"), "नमस्ते")
+            payload = request.call_args.args[1]
+            self.assertEqual(payload["pipelineTasks"][0]["taskType"], "asr")
+            self.assertEqual(payload["pipelineTasks"][0]["config"]["serviceId"], "asr-test")
+
+        with patch.dict(os.environ, {"AI4BHARAT_ASR_URL": "http://asr.local"}, clear=False), patch.object(
+            speech, "_post_json", return_value={"output": [{"source": "hello"}]}
+        ) as request:
+            self.assertEqual(speech.transcribe_ai4bharat(b"audio", "en"), "hello")
+            self.assertEqual(request.call_args.args[0], "http://asr.local/recognize/en")
+
+        with patch.dict(os.environ, {"SPEECH_PROVIDER": "bhashini", **bhashini_env}, clear=False):
+            self.assertEqual(speech.provider_status()["selected"], "bhashini")
+            self.assertTrue(speech.provider_status()["providers"]["bhashini"]["configured"])
 
     def test_emergency_alert_survives_ollama_outage_and_restart_store(self):
         session_id, _, headers, _ = self.active_session()
