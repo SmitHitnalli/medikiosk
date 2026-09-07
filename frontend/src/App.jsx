@@ -10,6 +10,7 @@ import ModeSelection from "./ModeSelection";
 import NurseStation from "./NurseStation";
 import PatientIdentification from "./PatientIdentification";
 import StaffPinGate from "./StaffPinGate";
+import SpeakInterview from "./SpeakInterview";
 import SystemStatusGate from "./SystemStatusGate";
 import { apiFetch, patientHeaders, staffHeaders } from "./api";
 import { clearRepeatAudio, playAudioBlob, stopAllAudio } from "./audio";
@@ -77,6 +78,7 @@ function App() {
   const [redFlagReason, setRedFlagReason] = useState(stored?.redFlagReason || "");
   const [redFlagEvents, setRedFlagEvents] = useState(stored?.redFlagEvents || []);
   const [isSending, setIsSending] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [scannedDocuments, setScannedDocuments] = useState(stored?.scannedDocuments || []);
   const [error, setError] = useState("");
@@ -118,6 +120,7 @@ function App() {
     recordingStartedAtRef.current = null;
     silenceAnimationRef.current = null;
     setIsSending(false);
+    setIsSpeaking(false);
     setIsRecording(false);
     stopAllAudio();
   }, []);
@@ -314,7 +317,7 @@ function App() {
     }
   }
 
-  async function chooseInteractionMode(value) {
+  async function chooseInteractionMode(value, nextPage = "patient") {
     if (!sessionToken || !language) return;
     setError("");
     try {
@@ -326,8 +329,8 @@ function App() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.detail || "Could not save your interaction preference.");
       setInteractionMode(result.interaction_mode);
-      setMessages([{ role: "assistant", content: greeting(language) }]);
-      navigate("patient");
+      if (nextPage === "patient") setMessages([{ role: "assistant", content: greeting(language) }]);
+      navigate(nextPage);
     } catch (preferenceError) {
       setError(preferenceError.message || "Unable to save your interaction preference.");
     }
@@ -365,6 +368,7 @@ function App() {
     if (interactionMode !== "speak" || !text) return;
     const controller = new AbortController();
     controllersRef.current.add(controller);
+    setIsSpeaking(true);
     try {
       const response = await apiFetch("/speak", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -378,6 +382,7 @@ function App() {
       }
     } finally {
       controllersRef.current.delete(controller);
+      if (requestGenerationRef.current === generation) setIsSpeaking(false);
     }
   }
 
@@ -573,6 +578,7 @@ function App() {
   else if (page === "patient") pageContent = <PatientIdentification language={language} interactionMode={interactionMode} sessionId={sessionId} sessionToken={sessionToken} onComplete={(patient) => { setPatientInfo(patient); navigate("department"); }} onBack={() => void returnToStart(false)} onClearData={() => void returnToStart(true)} />;
   else if (page === "department") pageContent = <DepartmentSelection language={language} interactionMode={interactionMode} onSelect={(value) => void chooseDepartment(value)} onBack={() => navigate("patient")} onClearData={() => void returnToStart(true)} />;
   else if (page === "documents") pageContent = <DocumentScanner language={language} interactionMode={interactionMode} initialDocuments={scannedDocuments} onDocumentsChange={(docs) => void persistDocuments(docs)} onDone={(docs) => { void persistDocuments(docs); navigate("chat"); }} onBack={() => navigate("chat")} onClearData={() => void returnToStart(true)} />;
+  else if (interactionMode === "speak") pageContent = <SpeakInterview language={language} messages={messages} redFlagReason={redFlagReason} isSending={isSending} isSpeaking={isSpeaking} isRecording={isRecording} interviewComplete={interviewComplete} idleWarning={idleWarning} error={error} documentCount={scannedDocuments.length} message={message} onMessageChange={setMessage} onSend={(value) => void sendTextMessage(value)} onToggleRecording={isRecording ? stopRecording : startRecording} onSwitchToChat={() => void chooseInteractionMode("chat", "chat")} onDocuments={() => navigate("documents")} onDashboard={() => navigate("dashboard")} onClearData={() => void returnToStart(true)} />;
   else pageContent = (
     <main className="app-shell">
       <section className="chat-card" aria-label="MediKiosk patient interview">

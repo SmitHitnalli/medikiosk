@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { playAudioBlob, stopAllAudio } from "./audio";
 import { apiFetch } from "./api";
+import { OrbSelectionLayout } from "./VoiceOrb";
 const MODE_PROMPTS = {
   en: "Would you like to speak with me, or type your answers? Say Speak or Chat, or tap a button below.",
   hi: "क्या आप मुझसे बोलकर बात करना चाहेंगे या अपने जवाब टाइप करना चाहेंगे? बोलकर बात करने के लिए Speak या टाइप करने के लिए Chat कहें, या नीचे दिए बटन को दबाएं।",
@@ -149,8 +150,8 @@ function ModeSelection({ language, onSelect, onBack }) {
   }
 
   return (
-    <main className="start-shell">
-      <section className="start-card language-card mode-selection-card" aria-label="Interview mode selection">
+    <OrbSelectionLayout state={isListening ? "listening" : "ready"} label={isListening ? (isHindi ? "सुन रहा है" : "Listening") : (isHindi ? "बोलें या टाइप करें" : "Speak or Chat")}>
+      <section className="start-card language-card mode-selection-card orb-popup-card" aria-label="Interview mode selection">
         <div className="brand-mark small" aria-hidden="true">M</div>
         <p className="start-eyebrow">MediKiosk</p>
         <h1>{isHindi ? "आप कैसे आगे बढ़ना चाहेंगे?" : "How would you like to continue?"}</h1>
@@ -166,7 +167,7 @@ function ModeSelection({ language, onSelect, onBack }) {
         {error && <p className="language-error" role="alert">{error}</p>}
         <button className="secondary-start-button" type="button" onClick={onBack}>{isHindi ? "वापस" : "Back"}</button>
       </section>
-    </main>
+    </OrbSelectionLayout>
   );
 }
 

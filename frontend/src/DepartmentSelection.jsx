@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
 import { playAudioBlob, stopAllAudio } from "./audio";
 import { apiFetch } from "./api";
+import VoiceOrb from "./VoiceOrb";
 const DEPARTMENT_PROMPTS = {
   en: "Which department are you visiting today?",
   hi: "आप आज किस विभाग में आए हैं?",
@@ -75,6 +76,7 @@ function DepartmentSelection({ language, interactionMode, onSelect, onBack, onCl
       <section className="start-card department-card" aria-label="Department selection">
         <div className="brand-mark small" aria-hidden="true">M</div>
         <p className="start-eyebrow">MediKiosk · {isHindi ? "विभाग" : "Department"}</p>
+        {isSpeakMode && <VoiceOrb compact state="ready" label={isHindi ? "विभाग चुनें" : "Choose a department"} />}
         <h1>{prompt}</h1>
         {promptStatus && <p className="language-error" role="status">{promptStatus}</p>}
         <div className="department-grid">

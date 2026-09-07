@@ -52,7 +52,7 @@
 
 ## Future redesign phases
 - [x] Phase 1 foundation: consent-first session lifecycle; language and Speak/Chat preferences saved after consent; individually attributable nurse/doctor/admin staff accounts; role-restricted staff APIs; explicit logout; append-only hash-chained audit events for consent, identity, clinical turns, alerts, record access, and exports. Regression suite expanded to 14 checks and the patient/staff browser flows were visually verified.
-- [ ] Phase 2 touchscreen and orb redesign: split patient interaction into the centered Speak experience and the orb-free Chat experience, with finger-sized controls and manual fallbacks.
+- [x] Phase 2 touchscreen and orb redesign: added the split orb-and-choice layout for language and mode selection; a centered, stateful orb for Speak identification, department selection, and clinical interview; an orb-free Chat path; large finger-sized controls, live captions, typed fallbacks, and in-flow mode switching. Phone numbers and Medi IDs remain touch-only and are never spoken aloud. Production build, 14 backend regressions, and both browser branches were verified.
 - [ ] Phase 3 adaptive clinical controller: natural model phrasing, coverage-state tracking, early allergies/medications, contradiction handling, and deterministic fallback after repeated model failures.
 - [ ] Phase 4 pluggable realtime speech: provider boundary, Bhashini API option, self-hosted AI4Bharat option, interruption, streaming, and local fallback.
 - [ ] Phase 5 clinically separated AYUSH profiles: shared safety intake plus an Ayurveda-specific assessment and practitioner-confirmed Prakriti/Dashavidha provenance.

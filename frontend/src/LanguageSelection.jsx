@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { playAudioBlob, stopAllAudio } from "./audio";
 
 import { apiFetch } from "./api";
+import { OrbSelectionLayout } from "./VoiceOrb";
 const ENGLISH_PROMPT = "If you want to continue this conversation in English, say English or tap the English button below";
 const HINDI_PROMPT = "Agar aapko baat cheet Hindi mein karni hai to Hindi boliye ya neeche Hindi button dabaiye";
 
@@ -151,8 +152,8 @@ function LanguageSelection({ onSelect, onBack }) {
   }
 
   return (
-    <main className="start-shell">
-      <section className="start-card language-selection-card" aria-label="Language selection">
+    <OrbSelectionLayout state={isListening ? "listening" : "ready"} label={isListening ? "Listening" : "Choose a language"}>
+      <section className="start-card language-selection-card orb-popup-card" aria-label="Language selection">
         <div className="brand-mark small" aria-hidden="true">M</div>
         <p className="start-eyebrow">MediKiosk</p>
         <h1>Choose your language</h1>
@@ -168,7 +169,7 @@ function LanguageSelection({ onSelect, onBack }) {
         {voiceError && <p className="language-error" role="alert">{voiceError}</p>}
         <button className="secondary-start-button" type="button" onClick={onBack}>Back</button>
       </section>
-    </main>
+    </OrbSelectionLayout>
   );
 }
 

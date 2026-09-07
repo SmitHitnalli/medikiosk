@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import ClearDataButton from "./ClearDataButton";
 import { playAudioBlob, stopAllAudio } from "./audio";
 import { apiFetch, patientHeaders } from "./api";
+import VoiceOrb from "./VoiceOrb";
 
 const PROMPTS = {
   en: "Have you visited us before?",
@@ -45,8 +46,7 @@ function normaliseMediId(value) {
 }
 
 function normalisePhone(value) {
-  const words = { zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9" };
-  return value.toLowerCase().split(/\s+/).map((part) => words[part] ?? part).join("").replace(/\D/g, "");
+  return value.replace(/\D/g, "");
 }
 
 function PatientIdentification({ language, interactionMode, sessionId, sessionToken, onComplete, onBack, onClearData }) {
@@ -153,8 +153,6 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
       const transcript = result.text?.trim() || "";
       if (!transcript) throw new Error("No speech was detected. Please try again.");
       if (field === "name") setName(transcript);
-      if (field === "phone") setPhoneNumber(normalisePhone(transcript));
-      if (field === "mediId") setMediId(normaliseMediId(transcript));
     } catch (requestError) {
       if (activeRef.current && !controller.signal.aborted) setError(requestError.message || "Unable to understand the voice input.");
     } finally {
@@ -232,7 +230,7 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
       if (!response.ok) throw new Error(result.detail || "Registration failed.");
       setRegisteredId(result.medi_id);
       setStep("registered");
-      if (isSpeakMode) speakForScreen(language === "hi" ? `आपकी मेडी आईडी ${result.medi_id} है। कृपया इसे याद रखें।` : `Your Medi ID is ${result.medi_id}. Please remember it. It will also be printed on your summary for next time.`);
+      if (isSpeakMode) speakForScreen(language === "hi" ? "आपकी मेडी आईडी स्क्रीन पर दिखाई गई है। कृपया इसे अगली बार के लिए सुरक्षित रखें।" : "Your Medi ID is shown on the screen. Please keep it safe for your next visit.");
     } catch (requestError) {
       if (activeRef.current && !controller.signal.aborted) setError(requestError.message || "Unable to register this patient.");
     } finally {
@@ -276,7 +274,7 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
         returning_patient: true,
       });
       setStep("welcome");
-      if (isSpeakMode) speakForScreen(language === "hi" ? `फिर से स्वागत है, ${result.name}।` : `Welcome back, ${result.name}.`);
+      if (isSpeakMode) speakForScreen(language === "hi" ? "फिर से स्वागत है। आपका विवरण मिल गया है।" : "Welcome back. We found your details.");
       setMediId(result.medi_id);
     } catch (requestError) {
       if (activeRef.current && !controller.signal.aborted) setError(requestError.message || "Unable to look up that Medi ID.");
@@ -302,6 +300,7 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
       <section className="start-card patient-id-card" aria-label="Patient identification">
         <div className="brand-mark small" aria-hidden="true">M</div>
         <p className="start-eyebrow">MediKiosk · {isHindi ? "रोगी की पहचान" : "Patient identification"}</p>
+        {isSpeakMode && <VoiceOrb compact state={recordingField ? "listening" : isBusy ? "thinking" : "ready"} label={recordingField ? (isHindi ? "सुन रहा है" : "Listening") : (isHindi ? "तैयार" : "Ready")} />}
         {step === "question" && <>
           <h1>{prompt}</h1>
           <div className="language-buttons patient-choice-buttons">
@@ -311,12 +310,11 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
         </>}
         {step === "new" && <>
           <h1>{isHindi ? "अपनी मेडी आईडी बनाएँ" : "Let’s create your Medi ID"}</h1>
-          <p className="start-copy">{isHindi ? "अपना विवरण भरें।" : "Please enter your details."} {isSpeakMode ? (isHindi ? "आप आवाज़ वाले बटन या टाइपिंग का उपयोग कर सकते हैं।" : "You can use the voice buttons or type instead.") : (isHindi ? "इस मुलाकात को दर्ज करने के लिए इस विवरण का उपयोग होगा।" : "Your details will be used to register this visit.")}</p>
+          <p className="start-copy">{isHindi ? "अपना विवरण भरें।" : "Please enter your details."} {isSpeakMode ? (isHindi ? "आप अपना नाम बोल सकते हैं। गोपनीयता के लिए फ़ोन नंबर टच कीबोर्ड से दर्ज करें।" : "You can say your name. For privacy, enter your phone number with the touch keyboard.") : (isHindi ? "इस मुलाकात को दर्ज करने के लिए इस विवरण का उपयोग होगा।" : "Your details will be used to register this visit.")}</p>
           <form className="patient-form" onSubmit={registerPatient}>
             <label>{isHindi ? "नाम" : "Name"}<input value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" /></label>
             {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "name" ? stopListening() : startListening("name")}>{recordingField === "name" ? (isHindi ? "नाम रिकॉर्ड करना बंद करें" : "Stop name recording") : (isHindi ? "🎙 अपना नाम बोलें" : "🎙 Say your name")}</button>}
             <label>{isHindi ? "फ़ोन नंबर" : "Phone number"}<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} inputMode="tel" autoComplete="tel" /></label>
-            {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "phone" ? stopListening() : startListening("phone")}>{recordingField === "phone" ? (isHindi ? "फ़ोन रिकॉर्ड करना बंद करें" : "Stop phone recording") : (isHindi ? "🎙 अपना फ़ोन नंबर बोलें" : "🎙 Say your phone number")}</button>}
             {recordingField && <p className="recording-status patient-recording"><span className="recording-dot" /> {isHindi ? "सुन रहे हैं..." : "Listening..."}</p>}
             <button className="start-button" type="submit" disabled={isBusy}>{isBusy ? (isHindi ? "दर्ज हो रहा है..." : "Registering...") : (isHindi ? "मेडी आईडी बनाएँ" : "Create Medi ID")}</button>
           </form>
@@ -329,10 +327,9 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
         </>}
         {step === "returning" && <>
           <h1>{isHindi ? "फिर से स्वागत है" : "Welcome back"}</h1>
-          <p className="start-copy">{isHindi ? "अपना विवरण खोजने के लिए मेडी आईडी लिखें या बोलें।" : "Enter or say your Medi ID so we can find your details."}</p>
+          <p className="start-copy">{isHindi ? "गोपनीयता के लिए टच कीबोर्ड से अपनी मेडी आईडी दर्ज करें।" : "For privacy, enter your Medi ID with the touch keyboard."}</p>
           <form className="patient-form" onSubmit={findPatient}>
             <label>Medi ID<input value={mediId} onChange={(event) => setMediId(event.target.value.toUpperCase())} placeholder="MK-ABC123" autoCapitalize="characters" /></label>
-            {isSpeakMode && <button className="field-voice-button" type="button" onClick={() => recordingField === "mediId" ? stopListening() : startListening("mediId")}>{recordingField === "mediId" ? (isHindi ? "आईडी रिकॉर्ड करना बंद करें" : "Stop ID recording") : (isHindi ? "🎙 अपनी मेडी आईडी बोलें" : "🎙 Say your Medi ID")}</button>}
             <button className="start-button" type="submit" disabled={isBusy || failedAttempts >= 3}>{isBusy ? (isHindi ? "जाँच हो रही है..." : "Checking...") : failedAttempts >= 3 ? (isHindi ? "खोज बंद है" : "Lookup locked") : (isHindi ? "मेरी मेडी आईडी खोजें" : "Find my Medi ID")}</button>
           </form>
           {failedAttempts >= 3 && <button className="field-voice-button" type="button" onClick={continueAsNewPatient}>{isHindi ? "नए रोगी के रूप में आगे बढ़ें" : "Continue as a new patient"}</button>}
@@ -345,7 +342,7 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
         {error && <p className="language-error" role="alert">{error}</p>}
         {status && <p className="prompt-status">{status}</p>}
         {step !== "question" && <button className="secondary-start-button" type="button" onClick={() => { setError(""); setStep("question"); }}>{isHindi ? "वापस" : "Back"}</button>}
-        <button className="secondary-start-button" type="button" onClick={onBack}>{isHindi ? "सहमति पर वापस जाएँ" : "Back to consent"}</button>
+        <button className="secondary-start-button" type="button" onClick={onBack}>{isHindi ? "शुरुआत पर वापस जाएँ" : "Back to start"}</button>
         <ClearDataButton language={language} onClearData={onClearData} />
       </section>
     </main>
