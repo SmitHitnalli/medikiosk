@@ -174,7 +174,14 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
   const [abhaLink, setAbhaLink] = useState({ number: "", address: "", method: "qr", reference: "" });
   const [abhaMessage, setAbhaMessage] = useState("");
   const [abdmStatus, setAbdmStatus] = useState(null);
+  const [activeSection, setActiveSection] = useState("overview");
+  const [showSessions, setShowSessions] = useState(false);
   const speechRequestRef = useRef(null);
+
+  useEffect(() => {
+    setActiveSection("overview");
+    setShowSessions(false);
+  }, [sessionId]);
 
   useEffect(() => {
     setAyushConfirmation({
@@ -440,7 +447,21 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
         </div>
       </header>
 
-      {recentSessions.length > 0 && (
+      <nav className="dashboard-section-nav" aria-label="Patient summary sections">
+        {[
+          ["overview", "Overview"],
+          ["review", "Review & sign"],
+          ...(hasAyushData ? [["ayurveda", "Ayurveda"]] : []),
+          ...((documents || []).length ? [["documents", `Documents (${documents.length})`]] : []),
+          ["integration", "ABHA / FHIR"],
+          ["transcript", "Transcript"],
+        ].map(([value, label]) => (
+          <button className={activeSection === value ? "active" : ""} type="button" key={value} onClick={() => setActiveSection(value)}>{label}</button>
+        ))}
+        {recentSessions.length > 0 && <button className={showSessions ? "active" : ""} type="button" onClick={() => setShowSessions((current) => !current)}>Patients ({recentSessions.length})</button>}
+      </nav>
+
+      {recentSessions.length > 0 && showSessions && (
         <section className="dashboard-card recent-sessions-card">
           <div className="card-heading"><div><p className="section-kicker">Patient records</p><h2>Recent clinical sessions</h2></div></div>
           <div className="recent-session-list">
@@ -477,7 +498,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
         {speechError && <p className="speech-error" role="alert">{speechError}</p>}
       </section>
 
-      {hasPatientData && sessionId && (
+      {activeSection === "review" && hasPatientData && sessionId && (
         <section className="dashboard-card clinical-review-card">
           <div className="card-heading"><div><p className="section-kicker">Clinician review</p><h2>Edit, sign and issue the record</h2></div><span className="card-icon">✓</span></div>
           <form className="clinical-edit-form" onSubmit={saveStructuredEdits}>
@@ -503,7 +524,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
       )}
 
       <div className="dashboard-grid">
-        <section className="dashboard-card hpi-card">
+        {activeSection === "overview" && <section className="dashboard-card hpi-card">
           <div className="card-heading">
             <div><p className="section-kicker">History of present illness</p><h2>Symptom details</h2></div>
             <span className="framework-badge">SOCRATES</span>
@@ -520,17 +541,17 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
               <dd><ListValue items={hpi.associated_symptoms} /></dd>
             </div>
           </dl>
-        </section>
+        </section>}
 
-        <section className="dashboard-card">
+        {activeSection === "overview" && <section className="dashboard-card">
           <div className="card-heading"><div><p className="section-kicker">Medication safety</p><h2>Drug & allergy history</h2></div><span className="card-icon">✚</span></div>
           <div className="stacked-detail">
             <div><dt>Current medications</dt><dd><ListValue items={drugHistory.current_medications} /></dd></div>
             <div><dt>Allergies</dt><dd><ListValue items={drugHistory.allergies} /></dd></div>
           </div>
-        </section>
+        </section>}
 
-        <section className="dashboard-card history-card">
+        {activeSection === "overview" && <section className="dashboard-card history-card">
           <div className="card-heading"><div><p className="section-kicker">Background history</p><h2>Medical, family & personal history</h2></div></div>
           <dl className="stacked-detail">
             <div><dt>Past medical history</dt><dd><ListValue items={patient.past_medical_history} /></dd></div>
@@ -542,9 +563,9 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
             <div><dt>Ahara-Vihara: Occupation</dt><dd><SafeValue value={patient.personal_history?.occupation} /></dd></div>
             <div><dt>Other symptoms review</dt><dd><SafeValue value={patient.review_of_systems} /></dd></div>
           </dl>
-        </section>
+        </section>}
 
-        {hasAyushData && (
+        {activeSection === "ayurveda" && hasAyushData && (
           <section className="dashboard-card ayush-card">
             <div className="card-heading"><div><p className="section-kicker">Ayurveda assessment</p><h2>Patient history and practitioner examination</h2></div><span className="ayush-badge">AYURVEDA</span></div>
             <dl className="detail-grid ayush-grid">
@@ -589,7 +610,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
           </section>
         )}
 
-        {documents && documents.length > 0 && (
+        {activeSection === "documents" && documents && documents.length > 0 && (
           <section className="dashboard-card documents-card">
             <div className="card-heading"><div><p className="section-kicker">Digitized documents</p><h2>Scanned by patient</h2></div><span className="card-icon">▣</span></div>
             <ul className="dashboard-doc-list">
@@ -621,7 +642,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
           </section>
         )}
 
-        <section className="dashboard-card trust-ledger-card">
+        {activeSection === "overview" && <section className="dashboard-card trust-ledger-card">
           <div className="card-heading"><div><p className="section-kicker">Trust ledger</p><h2>How this summary was built</h2></div><span className="card-icon">🛈</span></div>
 
           <div className="trust-metric">
@@ -666,9 +687,9 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
               </p>
             </div>
           )}
-        </section>
+        </section>}
 
-        <section className="dashboard-card abdm-push-card">
+        {activeSection === "integration" && <section className="dashboard-card abdm-push-card">
           <div className="card-heading"><div><p className="section-kicker">ABDM / Hospital HIS</p><h2>Push structured history</h2></div><span className="card-icon">⇪</span></div>
           {!hasPatientData || !sessionId ? (
             <p className="trust-metric-note">Select a patient session before reviewing and pushing its history.</p>
@@ -707,9 +728,9 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
               {showBundle && pushRecord && <pre className="abdm-bundle-view">{JSON.stringify(pushRecord.bundle, null, 2)}</pre>}
             </>
           )}
-        </section>
+        </section>}
 
-        <section className="dashboard-card transcript-card">
+        {activeSection === "transcript" && <section className="dashboard-card transcript-card">
           <div className="card-heading"><div><p className="section-kicker">Full record</p><h2>Conversation transcript</h2></div><span className="card-icon">≡</span></div>
           {transcript && transcript.length > 0 ? (
             <div className="dashboard-transcript-list">
@@ -723,7 +744,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
           ) : (
             <p className="muted-value">No conversation recorded yet.</p>
           )}
-        </section>
+        </section>}
       </div>
       <p className="dashboard-footnote">This summary is collected history, not a diagnosis. Confirm details with the patient.</p>
     </main>

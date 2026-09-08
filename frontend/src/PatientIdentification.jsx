@@ -28,7 +28,7 @@ const COPY = {
 const DIGITS = { zero:"0",oh:"0",one:"1",two:"2",to:"2",too:"2",three:"3",four:"4",for:"4",five:"5",six:"6",seven:"7",eight:"8",ate:"8",nine:"9", शून्य:"0",एक:"1",दो:"2",तीन:"3",चार:"4",पांच:"5",पाँच:"5",छह:"6",सात:"7",आठ:"8",नौ:"9" };
 function spokenDigits(value) {
   const direct = value.replace(/\D/g, "");
-  if (direct.length >= 6) return direct.slice(0, 10);
+  if (direct.length > 0) return direct.slice(0, 10);
   return normaliseVoiceText(value).split(" ").map((part) => DIGITS[part] || "").join("").slice(0, 10);
 }
 function formatPhone(value) {
@@ -78,6 +78,12 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
     return true;
   }, [confirmCancel]);
 
+  const repeatCurrentStep = useCallback(async () => {
+    await voice.speak(copy.unclear);
+    stepRunRef.current = "";
+    setVoiceRetries((current) => ({ ...current }));
+  }, [copy.unclear, voice.speak]);
+
   const register = useCallback(async () => {
     if (name.trim().length < 2 || spokenDigits(phone).length !== 10) {
       setError(isHindi ? "कृपया नाम और सही दस अंकों का फ़ोन नंबर दर्ज करें।" : "Please enter a name and a valid ten-digit phone number.");
@@ -120,35 +126,35 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
       let answer;
       if (step === "question") {
         answer = await voice.promptAndListen(copy.visited); if (interceptCommand(answer)) return;
-        const choice = voiceYesNo(answer); if (choice === true) setStep("returning"); else if (choice === false) setStep("name"); else { voice.setError(copy.unclear); stepRunRef.current = ""; }
+        const choice = voiceYesNo(answer); if (choice === true) setStep("returning"); else if (choice === false) setStep("name"); else await repeatCurrentStep();
       } else if (step === "name") {
         answer = await voice.promptAndListen(copy.name); if (interceptCommand(answer)) return;
-        if (answer.trim().length < 2) { voice.setError(copy.unclear); stepRunRef.current = ""; return; }
+        if (answer.trim().length < 2) { await repeatCurrentStep(); return; }
         setName(answer.trim()); setStep("confirm-name");
       } else if (step === "confirm-name") {
         answer = await voice.promptAndListen(copy.nameConfirm(name)); if (interceptCommand(answer)) return;
-        const choice = voiceYesNo(answer); if (choice === true) setStep("phone"); else if (choice === false) { const count=voiceRetries.name+1; setVoiceRetries((v)=>({...v,name:count})); setStep(count >= 3 ? "name-type" : "name"); } else { voice.setError(copy.unclear); stepRunRef.current=""; }
+        const choice = voiceYesNo(answer); if (choice === true) setStep("phone"); else if (choice === false) { const count=voiceRetries.name+1; setVoiceRetries((v)=>({...v,name:count})); setStep(count >= 3 ? "name-type" : "name"); } else await repeatCurrentStep();
       } else if (step === "phone") {
         answer = await voice.promptAndListen(copy.phone, { timeoutMs:8500 }); if (interceptCommand(answer)) return;
         const value=formatPhone(answer); if (spokenDigits(value).length !== 10) { const count=voiceRetries.phone+1; setVoiceRetries((v)=>({...v,phone:count})); setStep(count >= 3 ? "phone-type" : "phone-retry"); } else { setPhone(value); setStep("confirm-phone"); }
       } else if (step === "phone-retry") setStep("phone");
       else if (step === "confirm-phone") {
         answer = await voice.promptAndListen(copy.phoneConfirm(phone.split("").join(" ")), { timeoutMs:6000 }); if (interceptCommand(answer)) return;
-        const choice=voiceYesNo(answer); if (choice === true) setStep("abha-choice"); else if (choice === false) { const count=voiceRetries.phone+1; setVoiceRetries((v)=>({...v,phone:count})); setStep(count >= 3 ? "phone-type" : "phone"); } else { voice.setError(copy.unclear); stepRunRef.current=""; }
+        const choice=voiceYesNo(answer); if (choice === true) setStep("abha-choice"); else if (choice === false) { const count=voiceRetries.phone+1; setVoiceRetries((v)=>({...v,phone:count})); setStep(count >= 3 ? "phone-type" : "phone"); } else await repeatCurrentStep();
       } else if (step === "abha-choice") {
         answer=await voice.promptAndListen(copy.abha); if (interceptCommand(answer)) return;
-        const choice=voiceYesNo(answer); if (choice === true) setStep("abha"); else if (choice === false) await register(); else { voice.setError(copy.unclear); stepRunRef.current=""; }
+        const choice=voiceYesNo(answer); if (choice === true) setStep("abha"); else if (choice === false) await register(); else await repeatCurrentStep();
       } else if (step === "returning" || step === "returning-retry") {
         answer=await voice.promptAndListen(step === "returning" ? copy.medi : (isHindi ? "मेडी आईडी नहीं मिली। कृपया फिर से बोलें।" : "That Medi ID was not found. Please say it again."), { timeoutMs:8000 }); if (interceptCommand(answer)) return;
         if (!answer) return; await lookup(answer);
       } else if (step === "lookup-create") {
         answer=await voice.promptAndListen(isHindi ? "तीन प्रयासों के बाद मेडी आईडी नहीं मिली। क्या आप नई मेडी आईडी बनाना चाहेंगे?" : "We could not find the Medi ID after three attempts. Would you like to create a new Medi ID?");
-        if (voiceYesNo(answer) === true) { setFailedAttempts(0); setMediId(""); setStep("name"); } else if (voiceYesNo(answer) === false) await voice.speak(isHindi ? "ठीक है। कृपया स्टाफ से सहायता लें।" : "Okay. Please ask a staff member for help."); else { voice.setError(copy.unclear); stepRunRef.current=""; }
+        if (voiceYesNo(answer) === true) { setFailedAttempts(0); setMediId(""); setStep("name"); } else if (voiceYesNo(answer) === false) await voice.speak(isHindi ? "ठीक है। कृपया स्टाफ से सहायता लें।" : "Okay. Please ask a staff member for help."); else await repeatCurrentStep();
       } else if (step === "welcome") {
         await voice.speak(isHindi ? `फिर से स्वागत है, ${foundPatient?.name}। आपका विवरण मिल गया है।` : `Welcome back, ${foundPatient?.name}. We found your details.`); onComplete(foundPatient);
       } else if (step === "registered") {
         answer=await voice.promptAndListen(isHindi ? `आपकी मेडी आईडी ${registeredId.split("").join(" ")} है। इसे सुरक्षित रखें। आगे बढ़ने के लिए हाँ कहें।` : `Your Medi ID is ${registeredId.split("").join(" ")}. Please keep it safe. Say yes to continue.`, { timeoutMs:8000 });
-        if (voiceYesNo(answer) === true || normaliseVoiceText(answer).includes("continue")) onComplete({ medi_id:registeredId, name:name.trim(), phone_number:spokenDigits(phone), abha_status:abhaNumber ? "patient_provided" : "not_linked", prakriti:null, returning_patient:false }); else { voice.setError(copy.unclear); stepRunRef.current=""; }
+        if (voiceYesNo(answer) === true || normaliseVoiceText(answer).includes("continue")) onComplete({ medi_id:registeredId, name:name.trim(), phone_number:spokenDigits(phone), abha_status:abhaNumber ? "patient_provided" : "not_linked", prakriti:null, returning_patient:false }); else await repeatCurrentStep();
       }
     })().catch(() => {
       if (["name", "confirm-name"].includes(step)) {
@@ -162,7 +168,7 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
         if (count >= 3) setStep("medi-type"); else stepRunRef.current = "";
       } else stepRunRef.current = "";
     });
-  }, [abhaNumber, copy, failedAttempts, foundPatient, interceptCommand, isBusy, isHindi, isSpeak, lookup, name, onComplete, phone, register, registeredId, step, voice.promptAndListen, voice.setError, voice.speak, voiceRetries]);
+  }, [abhaNumber, copy, failedAttempts, foundPatient, interceptCommand, isBusy, isHindi, isSpeak, lookup, name, onComplete, phone, register, registeredId, repeatCurrentStep, step, voice.promptAndListen, voice.speak, voiceRetries]);
 
   function manualRegister(event) { event.preventDefault(); void register(); }
   const orbLabel = voice.state === "listening" ? (isHindi ? "सुन रहा है" : "Listening") : voice.state === "speaking" ? (isHindi ? "बोल रहा है" : "Speaking") : voice.state === "thinking" ? (isHindi ? "समझ रहा है" : "Understanding") : (isHindi ? "तैयार" : "Ready");

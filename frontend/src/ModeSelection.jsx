@@ -19,14 +19,15 @@ function ModeSelection({ language, onSelect, onBack, onClearData }) {
     else if (voiceYesNo(answer) === false) await voice.speak(isHindi ? "ठीक है, हम जारी रखेंगे।" : "Okay, we will continue.");
   }, [isHindi, onClearData, voice.promptAndListen, voice.speak]);
 
-  const handleAnswer = useCallback((answer) => {
+  const handleAnswer = useCallback(async (answer) => {
     if (isCancelCommand(answer)) { void confirmCancel(); return; }
     const text = normaliseVoiceText(answer);
-    if (["speak", "voice", "बोल", "आवाज़"].some((word) => text.includes(word))) onSelect("speak");
-    else if (["chat", "type", "टाइप", "लिख"].some((word) => text.includes(word))) onSelect("chat");
+    if (["speak", "voice", "bol", "awaaz", "aawaz", "बोल", "आवाज़"].some((word) => text.includes(word))) onSelect("speak");
+    else if (["chat", "type", "likh", "टाइप", "लिख"].some((word) => text.includes(word))) onSelect("chat");
     else {
-      voice.setError(isHindi ? "कृपया बोलकर या चैट कहें, या स्क्रीन पर चुनें।" : "Please say Speak or Chat, or choose on screen.");
-      window.setTimeout(() => void voice.listen(language).then(handleAnswer).catch(() => {}), 600);
+      const retryPrompt = isHindi ? "मैं समझ नहीं पाया। कृपया बोलकर या चैट कहें।" : "I did not understand. Please say Speak or Chat.";
+      const retry = await voice.promptAndListen(retryPrompt).catch(() => "");
+      if (retry) await handleAnswer(retry);
     }
   }, [confirmCancel, isHindi, language, onSelect, voice.listen, voice.setError]);
 
@@ -50,7 +51,7 @@ function ModeSelection({ language, onSelect, onBack, onClearData }) {
         </div>
         <p className="live-caption" aria-live="polite">{voice.caption}</p>
         {voice.error && <p className="language-error" role="alert">{voice.error}</p>}
-        <button className="voice-choice-button" type="button" onClick={() => voice.state === "listening" ? voice.stopListening() : void voice.listen(language).then(handleAnswer).catch(() => {})}>{voice.state === "listening" ? (isHindi ? "सुनना बंद करें" : "Stop listening") : (isHindi ? "🎙 फिर से सुनें" : "🎙 Listen again")}</button>
+        <button className="voice-choice-button" type="button" onClick={() => voice.state === "listening" ? voice.stopListening() : void voice.promptAndListen(PROMPTS[language] || PROMPTS.en).then(handleAnswer).catch(() => {})}>{voice.state === "listening" ? (isHindi ? "सुनना बंद करें" : "Stop listening") : (isHindi ? "🎙 फिर से सुनें" : "🎙 Listen again")}</button>
         <button className="secondary-start-button" type="button" onClick={onBack}>{isHindi ? "वापस" : "Back"}</button>
         <ClearDataButton language={language} onClearData={onClearData} />
       </section>

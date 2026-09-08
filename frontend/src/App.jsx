@@ -15,7 +15,7 @@ import SpeakInterview from "./SpeakInterview";
 import SystemStatusGate from "./SystemStatusGate";
 import { apiFetch, patientHeaders, staffHeaders } from "./api";
 import { clearRepeatAudio, playAudioBlob, stopAllAudio } from "./audio";
-import { isCancelCommand, isSwitchToChatCommand, voiceYesNo } from "./voiceFlow";
+import { isCancelCommand, isSwitchToChatCommand, playBrowserSpeech, voiceYesNo } from "./voiceFlow";
 
 const SESSION_STORAGE_KEY = "medikiosk-active-session";
 const IDLE_WARNING_MS = 4 * 60 * 1000;
@@ -97,12 +97,19 @@ function App() {
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const silenceStartedAtRef = useRef(null);
+  const heardSpeechRef = useRef(false);
   const recordingStartedAtRef = useRef(null);
   const silenceAnimationRef = useRef(null);
+  const recordingLimitRef = useRef(null);
+  const transcriptionRetryRef = useRef(0);
+  const speechOperationRef = useRef(0);
+  const speechControllerRef = useRef(null);
   const requestGenerationRef = useRef(0);
   const controllersRef = useRef(new Set());
   const pageRef = useRef(page);
   const interactionModeRef = useRef(interactionMode);
+  const isSendingRef = useRef(isSending);
+  const isRecordingRef = useRef(isRecording);
   const pendingVoiceCommandRef = useRef("");
   const interviewCompleteRef = useRef(interviewComplete);
   const readBackSummaryRef = useRef(readBackSummary);
@@ -112,6 +119,8 @@ function App() {
 
   useEffect(() => { pageRef.current = page; }, [page]);
   useEffect(() => { interactionModeRef.current = interactionMode; }, [interactionMode]);
+  useEffect(() => { isSendingRef.current = isSending; }, [isSending]);
+  useEffect(() => { isRecordingRef.current = isRecording; }, [isRecording]);
   useEffect(() => { pendingVoiceCommandRef.current = pendingVoiceCommand; }, [pendingVoiceCommand]);
   useEffect(() => { interviewCompleteRef.current = interviewComplete; }, [interviewComplete]);
   useEffect(() => { readBackSummaryRef.current = readBackSummary; }, [readBackSummary]);
@@ -129,6 +138,7 @@ function App() {
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
     mediaRecorderRef.current = null;
+    isRecordingRef.current = false;
     setIsRecording(false);
   }, []);
 
@@ -138,14 +148,19 @@ function App() {
     controllersRef.current.clear();
     discardActiveRecording();
     if (silenceAnimationRef.current) cancelAnimationFrame(silenceAnimationRef.current);
+    window.clearTimeout(recordingLimitRef.current);
+    speechControllerRef.current?.abort();
+    speechControllerRef.current = null;
     if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
     audioChunksRef.current = [];
     audioContextRef.current = null;
     analyserRef.current = null;
     silenceStartedAtRef.current = null;
+    heardSpeechRef.current = false;
     recordingStartedAtRef.current = null;
     silenceAnimationRef.current = null;
     setIsSending(false);
+    isSendingRef.current = false;
     setIsSpeaking(false);
     setPendingVoiceCommand("");
     pendingVoiceCommandRef.current = "";
@@ -397,27 +412,39 @@ function App() {
 
   async function speakAssistant(text, generation) {
     if (interactionMode !== "speak" || !text) return;
+    const speechOperation = ++speechOperationRef.current;
+    speechControllerRef.current?.abort();
     const controller = new AbortController();
+    speechControllerRef.current = controller;
     controllersRef.current.add(controller);
     setIsSpeaking(true);
+    let played = false;
     try {
       const response = await apiFetch("/speak", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, language: language || "en" }), signal: controller.signal,
       });
-      if (!response.ok || requestGenerationRef.current !== generation || pageRef.current !== "chat") return;
+      if (!response.ok) throw new Error("Speech service unavailable");
+      if (requestGenerationRef.current !== generation || pageRef.current !== "chat" || speechOperation !== speechOperationRef.current) return;
       await playAudioBlob(await response.blob());
+      played = true;
     } catch (speechError) {
-      if (speechError.name !== "AbortError" && speechError.message !== "Audio playback stopped.") {
-        setError("The reply is shown on screen, but its audio could not be played.");
+      if (speechError.name !== "AbortError" && speechError.message !== "Audio playback stopped." && speechOperation === speechOperationRef.current) {
+        try {
+          await playBrowserSpeech(text, language || "en");
+          played = true;
+        } catch {
+          setError(language === "hi" ? "उत्तर स्क्रीन पर है, लेकिन ऑडियो नहीं चल सका।" : "The reply is shown on screen, but its audio could not be played.");
+        }
       }
     } finally {
       controllersRef.current.delete(controller);
-      if (requestGenerationRef.current === generation) {
+      if (speechControllerRef.current === controller) speechControllerRef.current = null;
+      if (requestGenerationRef.current === generation && speechOperation === speechOperationRef.current) {
         setIsSpeaking(false);
         window.setTimeout(() => {
-          if (requestGenerationRef.current === generation && pageRef.current === "chat" && interactionModeRef.current === "speak") void startRecording();
-        }, 320);
+          if (played && requestGenerationRef.current === generation && pageRef.current === "chat" && interactionModeRef.current === "speak") void startRecording();
+        }, 450);
       }
     }
   }
@@ -533,6 +560,7 @@ function App() {
       if (!result.text?.trim()) throw new Error("No speech was detected. Please try again.");
       if (generation !== requestGenerationRef.current || pageRef.current !== "chat") return;
       const transcript = result.text.trim();
+      transcriptionRetryRef.current = 0;
       const command = pendingVoiceCommandRef.current;
       if (command) {
         const answer = voiceYesNo(transcript);
@@ -558,7 +586,15 @@ function App() {
       if (isSwitchToChatCommand(transcript)) return requestVoiceConfirmation("chat");
       await sendTextMessage(transcript, true);
     } catch (requestError) {
-      if (requestError.name !== "AbortError" && generation === requestGenerationRef.current) setError(requestError.message || "Unable to transcribe the recording.");
+      if (requestError.name !== "AbortError" && generation === requestGenerationRef.current) {
+        const retryPrompt = language === "hi" ? "मैं समझ नहीं पाया। कृपया फिर से बोलें।" : "I did not understand that. Please speak again.";
+        transcriptionRetryRef.current += 1;
+        setError(retryPrompt);
+        if (transcriptionRetryRef.current <= 2 && interactionModeRef.current === "speak") {
+          setMessages((current) => [...current, { role: "assistant", content: retryPrompt }]);
+          void speakAssistant(retryPrompt, generation);
+        }
+      }
     } finally {
       controllersRef.current.delete(controller);
       if (generation === requestGenerationRef.current) setIsSending(false);
@@ -572,6 +608,8 @@ function App() {
     audioContextRef.current = null;
     analyserRef.current = null;
     silenceStartedAtRef.current = null;
+    heardSpeechRef.current = false;
+    window.clearTimeout(recordingLimitRef.current);
   }
 
   function stopRecording() {
@@ -582,6 +620,7 @@ function App() {
     mediaStreamRef.current = null;
     stopSilenceMonitor();
     setIsRecording(false);
+    isRecordingRef.current = false;
   }
 
   function monitorSilence() {
@@ -591,20 +630,23 @@ function App() {
     analyser.getByteTimeDomainData(samples);
     const rms = Math.sqrt(samples.reduce((sum, sample) => sum + ((sample - 128) / 128) ** 2, 0) / samples.length);
     const now = Date.now();
-    if (now - recordingStartedAtRef.current > 1000 && rms < 0.018) {
+    if (rms >= 0.011) {
+      heardSpeechRef.current = true;
+      silenceStartedAtRef.current = null;
+    } else if (heardSpeechRef.current && now - recordingStartedAtRef.current > 1200) {
       silenceStartedAtRef.current ??= now;
-      if (now - silenceStartedAtRef.current >= 2500) return stopRecording();
-    } else silenceStartedAtRef.current = null;
+      if (now - silenceStartedAtRef.current >= 3200) return stopRecording();
+    }
     silenceAnimationRef.current = requestAnimationFrame(monitorSilence);
   }
 
   async function startRecording() {
-    if (isSending || isRecording || (interviewCompleteRef.current && !(readBackSummaryRef.current && !readBackConfirmedRef.current))) return;
+    if (isSendingRef.current || isRecordingRef.current || (interviewCompleteRef.current && !(readBackSummaryRef.current && !readBackConfirmedRef.current))) return;
     stopAllAudio();
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return setError("Audio recording is not supported in this browser.");
     const generation = requestGenerationRef.current;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (generation !== requestGenerationRef.current || pageRef.current !== "chat") {
         stream.getTracks().forEach((track) => track.stop());
         return;
@@ -621,7 +663,9 @@ function App() {
       };
       recorder.start();
       recordingStartedAtRef.current = Date.now();
+      heardSpeechRef.current = false;
       setError("");
+      isRecordingRef.current = true;
       setIsRecording(true);
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       if (AudioContextClass) {
@@ -634,6 +678,7 @@ function App() {
         void context.resume();
         silenceAnimationRef.current = requestAnimationFrame(monitorSilence);
       }
+      recordingLimitRef.current = window.setTimeout(() => stopRecording(), 30000);
     } catch (requestError) {
       setError(requestError.name === "NotAllowedError" ? "Microphone permission is required to record." : "Unable to access the microphone.");
     }

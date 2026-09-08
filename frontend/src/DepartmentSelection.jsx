@@ -8,7 +8,7 @@ const DEPARTMENTS = [
   { en:"Panchakarma", hi:"पंचकर्म", value:"Panchakarma", words:["panchakarma","panch karma","पंचकर्म"] },
   { en:"Shalya", hi:"शल्य", value:"Shalya", words:["shalya","surgery","शल्य"] },
   { en:"Prasuti Tantra", hi:"प्रसूति तंत्र", value:"Prasuti Tantra", words:["prasuti","prasoothi","pregnancy","women","प्रसूति"] },
-  { en:"General consultation", hi:"सामान्य परामर्श", value:"general", words:["general","not sure","don't know","dont know","सामान्य","पता नहीं"] },
+  { en:"General consultation", hi:"सामान्य परामर्श", value:"general", words:["general","not sure","don't know","dont know","samanya","pata nahi","सामान्य","पता नहीं"] },
 ];
 const PROMPTS = { en:"Which department are you visiting? Say Kayachikitsa, Panchakarma, Shalya, Prasuti Tantra, or General if you are not sure.", hi:"आप किस विभाग में आए हैं? कायचिकित्सा, पंचकर्म, शल्य, प्रसूति तंत्र, या निश्चित न होने पर सामान्य कहें।" };
 
@@ -29,13 +29,21 @@ function DepartmentSelection({ language, interactionMode, onSelect, onBack, onCl
     if (isCancelCommand(answer)) return confirmCancel();
     const text=normaliseVoiceText(answer);
     const match=DEPARTMENTS.find((item)=>item.words.some((word)=>text.includes(word)));
-    if (!match) { voice.setError(isHindi ? "विभाग समझ नहीं आया। फिर से बोलें या स्क्रीन पर चुनें।" : "I did not recognise that department. Try again or tap a choice."); return; }
+    if (!match) {
+      const retry = await voice.promptAndListen(isHindi ? "मैं विभाग नहीं समझ पाया। कृपया फिर से बोलें।" : "I did not understand the department. Please speak again.").catch(()=>"");
+      if (retry) return hearDepartment(retry);
+      return;
+    }
     setCandidate(match);
     const confirmation=await voice.promptAndListen(isHindi ? `आपने ${match.hi} चुना है। क्या यह सही है?` : `You selected ${match.en}. Is that correct?`).catch(()=>"");
     if (isCancelCommand(confirmation)) return confirmCancel();
     if (voiceYesNo(confirmation) === true) onSelect(match.value);
     else if (voiceYesNo(confirmation) === false) { setCandidate(null); const retry=await voice.promptAndListen(PROMPTS[language] || PROMPTS.en).catch(()=>""); return hearDepartment(retry); }
-    else voice.setError(isHindi ? "हाँ या नहीं कहें, या स्क्रीन पर विभाग चुनें।" : "Please say yes or no, or choose the department on screen.");
+    else {
+      const retry = await voice.promptAndListen(isHindi ? "मैं समझ नहीं पाया। हाँ या नहीं कहें।" : "I did not understand. Please say yes or no.").catch(()=>"");
+      if (voiceYesNo(retry) === true) onSelect(match.value);
+      else if (voiceYesNo(retry) === false) { setCandidate(null); const next = await voice.promptAndListen(PROMPTS[language] || PROMPTS.en).catch(()=>""); if (next) return hearDepartment(next); }
+    }
   }, [confirmCancel, isHindi, language, onSelect, voice.promptAndListen, voice.setError]);
 
   useEffect(()=>{

@@ -1447,14 +1447,22 @@ async def _read_upload(file: UploadFile, allowed_types: set[str]) -> bytes:
     return data
 
 
-def _transcribe_bytes(audio_data: bytes, suffix: str) -> str:
+def _transcribe_bytes(audio_data: bytes, suffix: str, language: str | None = None) -> str:
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(audio_data)
             temp_path = temp_file.name
         model = _get_whisper_model()
-        segments, _ = model.transcribe(temp_path)
+        transcribe_options = {
+            "language": language if language in {"en", "hi"} else None,
+            "task": "transcribe",
+            "vad_filter": True,
+            "vad_parameters": {"min_silence_duration_ms": 700},
+        }
+        if language == "hi":
+            transcribe_options["initial_prompt"] = "यह हिंदी में बातचीत है। उत्तर देवनागरी लिपि में लिखें।"
+        segments, _ = model.transcribe(temp_path, **transcribe_options)
         return " ".join(segment.text.strip() for segment in segments).strip()
     finally:
         if temp_path:
@@ -1489,11 +1497,11 @@ async def transcribe(
             elif requested_provider == "ai4bharat":
                 text = await run_in_threadpool(transcribe_ai4bharat, audio_data, language)
             else:
-                text = await run_in_threadpool(_transcribe_bytes, audio_data, suffix)
+                text = await run_in_threadpool(_transcribe_bytes, audio_data, suffix, language)
         except SpeechProviderError:
             fallback_from = requested_provider
             used_provider = "local"
-            text = await run_in_threadpool(_transcribe_bytes, audio_data, suffix)
+            text = await run_in_threadpool(_transcribe_bytes, audio_data, suffix, language)
         return {"text": text, "provider": used_provider, "fallback_from": fallback_from}
     except HTTPException:
         raise

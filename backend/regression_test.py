@@ -599,17 +599,23 @@ class MediKioskRegressionTests(unittest.TestCase):
             text = "hello"
 
         class _SucceedingModel:
-            def transcribe(self, path):
+            def transcribe(self, path, **options):
                 seen_paths.append(path)
+                self.options = options
                 return [_Segment()], None
 
-        with patch.object(main, "_get_whisper_model", return_value=_SucceedingModel()):
-            text = main._transcribe_bytes(b"fake-audio-bytes", ".wav")
+        model = _SucceedingModel()
+        with patch.object(main, "_get_whisper_model", return_value=model):
+            text = main._transcribe_bytes(b"fake-audio-bytes", ".wav", "hi")
         self.assertEqual(text, "hello")
+        self.assertEqual(model.options["language"], "hi")
+        self.assertEqual(model.options["task"], "transcribe")
+        self.assertIn("देवनागरी", model.options["initial_prompt"])
+        self.assertTrue(model.options["vad_filter"])
         self.assertFalse(os.path.exists(seen_paths[-1]))
 
         class _FailingModel:
-            def transcribe(self, path):
+            def transcribe(self, path, **_options):
                 seen_paths.append(path)
                 raise RuntimeError("boom")
 

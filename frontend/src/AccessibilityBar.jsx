@@ -5,7 +5,7 @@ import { apiFetch, patientHeaders } from "./api";
 const TEXT_SIZES = ["normal", "large", "xlarge"];
 const TEXT_SIZE_LABELS = { normal: "A", large: "A+", xlarge: "A++" };
 const STORAGE_KEY_SIZE = "medikiosk-text-size";
-const STORAGE_KEY_CONTRAST = "medikiosk-high-contrast";
+const STORAGE_KEY_SIZE_DEFAULT = "medikiosk-text-size-default-v2";
 const STORAGE_KEY_THEME = "medikiosk-theme";
 // Screens where staff themselves are looking at the alert feed - a "call for
 // help" button there would be noise, not a useful patient-facing control.
@@ -13,18 +13,15 @@ const STAFF_PAGES = new Set(["dashboard", "nurse-station"]);
 
 function readStoredTextSize() {
   try {
+    if (window.localStorage.getItem(STORAGE_KEY_SIZE_DEFAULT) !== "aplus") {
+      window.localStorage.setItem(STORAGE_KEY_SIZE_DEFAULT, "aplus");
+      window.localStorage.setItem(STORAGE_KEY_SIZE, "large");
+      return "large";
+    }
     const stored = window.localStorage.getItem(STORAGE_KEY_SIZE);
-    return TEXT_SIZES.includes(stored) ? stored : "normal";
+    return TEXT_SIZES.includes(stored) ? stored : "large";
   } catch {
-    return "normal";
-  }
-}
-
-function readStoredContrast() {
-  try {
-    return window.localStorage.getItem(STORAGE_KEY_CONTRAST) === "true";
-  } catch {
-    return false;
+    return "large";
   }
 }
 
@@ -33,7 +30,7 @@ function readStoredTheme() {
     const stored = window.localStorage.getItem(STORAGE_KEY_THEME);
     if (stored === "dark" || stored === "light") return stored;
   } catch { /* Use the system preference below. */ }
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return "light";
 }
 
 const RESET_EVENT = "medikiosk-a11y-reset";
@@ -47,7 +44,7 @@ const RESET_EVENT = "medikiosk-a11y-reset";
 export function resetAccessibilityPreferences() {
   try {
     window.localStorage.removeItem(STORAGE_KEY_SIZE);
-    window.localStorage.removeItem(STORAGE_KEY_CONTRAST);
+    window.localStorage.setItem(STORAGE_KEY_SIZE_DEFAULT, "aplus");
     window.localStorage.removeItem(STORAGE_KEY_THEME);
   } catch {
     // Private browsing / storage blocked - nothing to clear.
@@ -69,12 +66,16 @@ export function resetAccessibilityPreferences() {
 // screen to notify staff via the Nurse Station alert feed.
 function AccessibilityBar({ sessionId, sessionToken, page }) {
   const [textSize, setTextSize] = useState(readStoredTextSize);
-  const [highContrast, setHighContrast] = useState(readStoredContrast);
   const [theme, setTheme] = useState(readStoredTheme);
   const [canRepeat, setCanRepeat] = useState(hasRepeatableAudio);
   const [helpStatus, setHelpStatus] = useState("idle"); // idle | sending | sent | error
   const helpTimerRef = useRef(null);
   const helpRequestRef = useRef(null);
+
+  useEffect(() => {
+    delete document.documentElement.dataset.highContrast;
+    try { window.localStorage.removeItem("medikiosk-high-contrast"); } catch { /* Storage may be blocked. */ }
+  }, []);
 
   useEffect(() => {
     document.documentElement.dataset.textSize = textSize;
@@ -84,15 +85,6 @@ function AccessibilityBar({ sessionId, sessionToken, page }) {
       // Private browsing / storage blocked - setting just won't persist.
     }
   }, [textSize]);
-
-  useEffect(() => {
-    document.documentElement.dataset.highContrast = highContrast ? "true" : "false";
-    try {
-      window.localStorage.setItem(STORAGE_KEY_CONTRAST, highContrast ? "true" : "false");
-    } catch {
-      // Private browsing / storage blocked - setting just won't persist.
-    }
-  }, [highContrast]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -111,9 +103,9 @@ function AccessibilityBar({ sessionId, sessionToken, page }) {
 
   useEffect(() => {
     function handleReset() {
-      setTextSize("normal");
-      setHighContrast(false);
-      setTheme(window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      setTextSize("large");
+      setTheme("light");
+      delete document.documentElement.dataset.highContrast;
     }
     window.addEventListener(RESET_EVENT, handleReset);
     return () => window.removeEventListener(RESET_EVENT, handleReset);
@@ -198,16 +190,6 @@ function AccessibilityBar({ sessionId, sessionToken, page }) {
         title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
       >
         {theme === "dark" ? "☀" : "☾"}
-      </button>
-      <button
-        className={`a11y-button ${highContrast ? "active" : ""}`}
-        type="button"
-        onClick={() => setHighContrast((current) => !current)}
-        aria-pressed={highContrast}
-        aria-label="Toggle high contrast"
-        title="Toggle high contrast"
-      >
-        ◐
       </button>
       {showHelp && (
         <button
