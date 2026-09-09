@@ -65,10 +65,11 @@ function PatientIdentification({ language, interactionMode, sessionId, sessionTo
 
   const confirmCancel = useCallback(async () => {
     try {
-      const answer = await voice.promptAndListen(copy.cancel);
+      let answer = await voice.promptAndListen(copy.cancel);
+      if (voiceYesNo(answer) === null) answer = await voice.promptAndListen(copy.unclear, { retries: 0 });
       if (voiceYesNo(answer) === true) onClearData();
       else if (voiceYesNo(answer) === false) await voice.speak(isHindi ? "ठीक है, हम जारी रखेंगे।" : "Okay, we will keep going.");
-      else voice.setError(copy.unclear);
+      else voice.setError(isHindi ? "कृपया स्क्रीन के विकल्प का उपयोग करें।" : "Please use the on-screen choice.");
     } catch { /* Typed controls remain available. */ }
   }, [copy, isHindi, onClearData, voice.promptAndListen, voice.setError, voice.speak]);
 

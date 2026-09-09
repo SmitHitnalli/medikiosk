@@ -635,6 +635,18 @@ class MediKioskRegressionTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()["text"], "yes")
 
+    def test_transcribe_auto_language_uses_local_detection(self):
+        with patch.object(main, "_transcribe_bytes", return_value="हिंदी") as transcriber:
+            response = self.client.post(
+                "/transcribe",
+                files={"file": ("voice.webm", b"browser-audio", "audio/webm")},
+                data={"language": "auto", "provider": "bhashini"},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["text"], "हिंदी")
+        self.assertEqual(response.json()["provider"], "local")
+        self.assertEqual(transcriber.call_args.args[2], "auto")
+
     def test_prakriti_patch_endpoint_always_rejects_patient_writes(self):
         session_id, _, headers, medi_id = self.active_session()
         response = self.client.patch(f"/patients/{medi_id}/prakriti", headers=headers)

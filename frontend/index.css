@@ -415,8 +415,8 @@ h1 { margin: 0; color: #143c3b; font-family: "Space Grotesk", "Noto Sans Devanag
 .clear-confirm-yes { min-height: 44px; border: 1px solid #e8aaa3; border-radius: 11px; color: #a52b27; background: transparent; cursor: pointer; font-size: 13px; font-weight: 700; }
 .clear-confirm-yes:hover { background: #fff0ee; }
 
-/* Accessibility: text size + high contrast, toggled via data attributes on
-   <html> so they apply globally regardless of which screen is mounted. */
+/* Accessibility text size applies globally without changing the effective
+   viewport dimensions. */
 /* Increase readable type without zooming the entire layout. Page-level zoom
    changed the effective viewport and clipped kiosk screens at A+/A++. */
 html[data-text-size="large"] { font-size: 18px; }
@@ -425,42 +425,6 @@ html[data-text-size="large"] .start-copy,html[data-text-size="large"] .consent-c
 html[data-text-size="large"] .message-bubble p,html[data-text-size="large"] button,html[data-text-size="large"] input { font-size:1.08em; }
 html[data-text-size="xlarge"] .start-copy,html[data-text-size="xlarge"] .consent-copy,html[data-text-size="xlarge"] .spoken-caption,
 html[data-text-size="xlarge"] .message-bubble p,html[data-text-size="xlarge"] button,html[data-text-size="xlarge"] input { font-size:1.16em; }
-
-html[data-high-contrast="true"] * {
-  background-color: #000 !important;
-  background-image: none !important;
-  color: #fff !important;
-  border-color: #fff !important;
-  box-shadow: none !important;
-  text-shadow: none !important;
-}
-html[data-high-contrast="true"] button:not(:disabled),
-html[data-high-contrast="true"] .start-button,
-html[data-high-contrast="true"] .language-button,
-html[data-high-contrast="true"] .department-button {
-  background-color: #ffe600 !important;
-  color: #000 !important;
-  border: 2px solid #fff !important;
-}
-html[data-high-contrast="true"] button:disabled {
-  opacity: .6;
-  border-color: #888 !important;
-  color: #888 !important;
-}
-html[data-high-contrast="true"] a {
-  color: #ffe600 !important;
-  text-decoration: underline !important;
-}
-html[data-high-contrast="true"] input,
-html[data-high-contrast="true"] textarea {
-  background-color: #000 !important;
-  color: #fff !important;
-  border: 2px solid #fff !important;
-}
-html[data-high-contrast="true"] .message-row.user .message-bubble {
-  background-color: #ffe600 !important;
-  color: #000 !important;
-}
 
 .a11y-bar { position: fixed; right: 14px; bottom: 14px; z-index: 40; display: flex; gap: 8px; padding: 6px; border-radius: 999px; background: #0d3b3bd9; box-shadow: 0 8px 24px rgba(0, 0, 0, .28); }
 .a11y-button { display: grid; min-width: 44px; min-height: 44px; place-items: center; border: 1px solid #ffffff40; border-radius: 999px; color: #fff; background: transparent; cursor: pointer; font-size: 15px; font-weight: 700; }
@@ -485,7 +449,6 @@ html[data-high-contrast="true"] .message-row.user .message-bubble {
   font-weight: 700;
   text-align: center;
 }
-html[data-high-contrast="true"] .system-banner { background-color: #ffe600 !important; color: #000 !important; }
 
 /* ABDM/HIS mock-push card (Doctor dashboard) */
 .abdm-push-copy { margin: 0 0 14px; color: #4c6864; font-size: 13px; line-height: 1.55; }
@@ -508,10 +471,6 @@ html[data-high-contrast="true"] .system-banner { background-color: #ffe600 !impo
 .a11y-help.a11y-help-sending { opacity: .7; }
 .a11y-help.a11y-help-sent { color: #0d3b3b; background: #6fcf97; border-color: #6fcf97; }
 .a11y-help.a11y-help-error { background: #d83d35; border-color: #d83d35; }
-html[data-high-contrast="true"] .a11y-bar { background-color: #000 !important; border: 2px solid #fff !important; }
-html[data-high-contrast="true"] .a11y-button { border-color: #fff !important; }
-html[data-high-contrast="true"] .a11y-help.a11y-help-sent { background-color: #6fcf97 !important; color: #000 !important; }
-
 /* A real light/dark theme. Patient voice screens already use the dark brand
    canvas; these rules bring chat, staff, dialogs, forms, and diagnostics into
    the same theme without changing clinical alert colors. */
@@ -697,6 +656,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   box-shadow: var(--shadow);
 }
 .start-card { max-height: calc(100dvh - 24px); overflow: auto; padding: clamp(22px, 4vh, 44px); }
+.chat-card { height: min(760px, calc(100dvh - 32px)); min-height: 0; }
+.scanner-doc-remove { width: 44px; height: 44px; min-height: 44px; font-size: 17px; }
 .start-card h1, .start-card .voice-orb-label, .staff-pin-heading,
 .card-heading h2, .chief-complaint-value { color: var(--text); }
 .start-copy, .start-note, .known-gap, .prompt-status, .hindi-heading,
@@ -787,6 +748,9 @@ html[data-theme="dark"] .dashboard-section-nav button.active { color: #06201d; }
 .chief-complaint-card { padding: 20px 24px; }
 .dashboard-grid { grid-template-columns: minmax(0, 1.35fr) minmax(300px, .8fr); align-items: start; }
 .dashboard-card { padding: 22px; }
+.dashboard-empty-state { max-width: 760px; margin: 28px auto; text-align: center; }
+.dashboard-empty-state h2 { margin: 0; color: var(--text); }
+.dashboard-empty-state p:last-child { margin: 10px auto 0; max-width: 560px; color: var(--muted); line-height: 1.55; }
 .clinical-review-card { margin: 0 auto 18px; }
 .trust-ledger-card, .transcript-card, .abdm-push-card, .ayush-card, .documents-card { grid-column: 1 / -1; }
 .card-heading { margin-bottom: 16px; }
@@ -811,9 +775,25 @@ html[data-theme="dark"] .dashboard-section-nav button.active { color: #06201d; }
   .consent-caption { display: none; }
 }
 
+@media (max-height: 620px) {
+  .start-card.consent-card { padding: 10px 22px; }
+  .consent-title-row .voice-orb-wrap { display: none; }
+  .consent-title-row h1 { font-size: 27px; }
+  .consent-hindi-title { margin-top: 2px; font-size: 17px; }
+  .consent-essential { margin-top: 6px; padding: 8px 14px; }
+  .consent-lead { margin-bottom: 4px; }
+  .consent-essential li { gap: 10px; padding: 2px 0; font-size: 12px; }
+  .consent-boundary, .consent-hindi-summary { margin-top: 6px; font-size: 11.5px; line-height: 1.35; }
+  .consent-hindi-summary { padding-top: 6px; }
+  .consent-actions { margin-top: 7px; }
+  .consent-actions .start-button { min-height: 44px; }
+  .consent-actions .decline-button, .consent-actions .consent-listen-button { min-height: 40px; }
+  .consent-card .prompt-status { margin-top: 4px; font-size: 10px; }
+}
+
 @media (max-width: 820px) {
   .dashboard-header { flex-direction: column; }
-  .dashboard-actions { justify-content: flex-start; }
+  .dashboard-actions { flex-direction: row; justify-content: flex-start; }
   .dashboard-grid { grid-template-columns: 1fr; }
   .consent-essential li { grid-template-columns: 1fr; gap: 3px; }
 }
@@ -823,9 +803,23 @@ html[data-theme="dark"] .dashboard-section-nav button.active { color: #06201d; }
   .start-card { max-height: none; border-radius: 20px; }
   .consent-title-row { gap: 12px; }
   .consent-title-row .voice-orb-wrap { display: none; }
+  .consent-shell { height: 100dvh; overflow: hidden; padding: 8px; }
+  .start-card.consent-card { max-height: calc(100dvh - 16px); padding: 14px 16px 66px; overflow: auto; }
+  .consent-title-row { justify-content: flex-start; }
+  .consent-title-row h1 { font-size: 27px; }
+  .consent-hindi-title { margin-top: 3px; font-size: 17px; }
+  .consent-essential { margin-top: 10px; padding: 10px 12px; }
+  .consent-lead { margin-bottom: 5px; font-size: 13px; }
+  .consent-essential li { grid-template-columns: 108px minmax(0, 1fr); gap: 8px; padding: 5px 0; font-size: 11.5px; }
+  .consent-essential li span { line-height: 1.3; }
+  .consent-boundary, .consent-hindi-summary { margin-top: 7px; font-size: 11px; line-height: 1.35; }
+  .consent-hindi-summary { padding-top: 7px; }
   .consent-actions { grid-template-columns: 1fr; }
   .consent-actions .start-button, .consent-actions .decline-button, .consent-actions .consent-listen-button { grid-column: 1; }
+  .consent-actions .start-button, .consent-actions .decline-button, .consent-actions .consent-listen-button { min-height: 44px; font-size: 13px; }
+  .consent-card .prompt-status { margin-top: 6px; font-size: 10px; }
   .language-buttons, .mode-choice-grid, .department-grid { grid-template-columns: 1fr; }
   .department-button:last-child { grid-column: auto; }
   .a11y-bar { max-width: calc(100vw - 20px); }
+  .dashboard-actions { align-items: stretch; }
 }

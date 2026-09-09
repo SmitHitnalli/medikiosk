@@ -1475,7 +1475,7 @@ def _transcribe_bytes(audio_data: bytes, suffix: str, language: str | None = Non
 @app.post("/transcribe")
 async def transcribe(
     file: UploadFile = File(...),
-    language: Literal["en", "hi"] = Form(default="en"),
+    language: Literal["en", "hi", "auto"] = Form(default="en"),
     provider: Literal["auto", "local", "bhashini", "ai4bharat"] = Form(default="auto"),
 ) -> dict:
     try:
@@ -1486,7 +1486,10 @@ async def transcribe(
         suffix = Path(file.filename or "audio.webm").suffix or ".webm"
         if suffix.lower() not in {".webm", ".wav", ".mp3", ".m4a", ".mp4", ".ogg"}:
             raise HTTPException(status_code=415, detail="Unsupported audio file extension")
-        requested_provider = selected_provider(provider)
+        # The first bilingual prompt has no selected language yet. Local
+        # Whisper can detect it; configured remote adapters require a concrete
+        # source language and therefore must not receive the sentinel value.
+        requested_provider = "local" if language == "auto" else selected_provider(provider)
         used_provider = requested_provider
         fallback_from = None
         try:

@@ -14,22 +14,27 @@ function ModeSelection({ language, onSelect, onBack, onClearData }) {
   const startedRef = useRef(false);
 
   const confirmCancel = useCallback(async () => {
-    const answer = await voice.promptAndListen(isHindi ? "क्या आप वाकई रद्द करके अपना डेटा मिटाना चाहते हैं? हाँ या नहीं कहें।" : "Are you sure you want to cancel and clear your data? Say yes or no.").catch(() => "");
+    let answer = await voice.promptAndListen(isHindi ? "क्या आप वाकई रद्द करके अपना डेटा मिटाना चाहते हैं? हाँ या नहीं कहें।" : "Are you sure you want to cancel and clear your data? Say yes or no.").catch(() => "");
+    if (voiceYesNo(answer) === null) answer = await voice.promptAndListen(isHindi ? "मैं समझ नहीं पाया। हाँ या नहीं कहें।" : "I did not understand. Please say yes or no.", { retries: 0 }).catch(() => "");
     if (voiceYesNo(answer) === true) onClearData();
     else if (voiceYesNo(answer) === false) await voice.speak(isHindi ? "ठीक है, हम जारी रखेंगे।" : "Okay, we will continue.");
   }, [isHindi, onClearData, voice.promptAndListen, voice.speak]);
 
-  const handleAnswer = useCallback(async (answer) => {
+  const handleAnswer = useCallback(async (answer, attempt = 0) => {
     if (isCancelCommand(answer)) { void confirmCancel(); return; }
     const text = normaliseVoiceText(answer);
     if (["speak", "voice", "bol", "awaaz", "aawaz", "बोल", "आवाज़"].some((word) => text.includes(word))) onSelect("speak");
     else if (["chat", "type", "likh", "टाइप", "लिख"].some((word) => text.includes(word))) onSelect("chat");
     else {
+      if (attempt >= 2) {
+        voice.setError(isHindi ? "कृपया स्क्रीन से बोलकर या चैट चुनें।" : "Please choose Speak or Chat on the screen.");
+        return;
+      }
       const retryPrompt = isHindi ? "मैं समझ नहीं पाया। कृपया बोलकर या चैट कहें।" : "I did not understand. Please say Speak or Chat.";
       const retry = await voice.promptAndListen(retryPrompt).catch(() => "");
-      if (retry) await handleAnswer(retry);
+      if (retry) await handleAnswer(retry, attempt + 1);
     }
-  }, [confirmCancel, isHindi, language, onSelect, voice.listen, voice.setError]);
+  }, [confirmCancel, isHindi, onSelect, voice.promptAndListen, voice.setError]);
 
   useEffect(() => {
     if (startedRef.current) return;

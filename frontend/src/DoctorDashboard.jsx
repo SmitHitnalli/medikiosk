@@ -450,11 +450,13 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
       <nav className="dashboard-section-nav" aria-label="Patient summary sections">
         {[
           ["overview", "Overview"],
-          ["review", "Review & sign"],
-          ...(hasAyushData ? [["ayurveda", "Ayurveda"]] : []),
-          ...((documents || []).length ? [["documents", `Documents (${documents.length})`]] : []),
-          ["integration", "ABHA / FHIR"],
-          ["transcript", "Transcript"],
+          ...(hasPatientData ? [
+            ["review", "Review & sign"],
+            ...(hasAyushData ? [["ayurveda", "Ayurveda"]] : []),
+            ...((documents || []).length ? [["documents", `Documents (${documents.length})`]] : []),
+            ["integration", "ABHA / FHIR"],
+            ["transcript", "Transcript"],
+          ] : []),
         ].map(([value, label]) => (
           <button className={activeSection === value ? "active" : ""} type="button" key={value} onClick={() => setActiveSection(value)}>{label}</button>
         ))}
@@ -523,7 +525,15 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
         </section>
       )}
 
-      <div className="dashboard-grid">
+      {!hasPatientData && (
+        <section className="dashboard-card dashboard-empty-state">
+          <p className="section-kicker">Ready for review</p>
+          <h2>Select a patient record</h2>
+          <p>Open <strong>Patients ({recentSessions.length})</strong> above, then choose a visit to review its history, documents, safety flags and sign-off status.</p>
+        </section>
+      )}
+
+      {hasPatientData && <div className="dashboard-grid">
         {activeSection === "overview" && <section className="dashboard-card hpi-card">
           <div className="card-heading">
             <div><p className="section-kicker">History of present illness</p><h2>Symptom details</h2></div>
@@ -745,7 +755,7 @@ function DoctorDashboard({ patientData, documents, transcript, redFlagEvents, de
             <p className="muted-value">No conversation recorded yet.</p>
           )}
         </section>}
-      </div>
+      </div>}
       <p className="dashboard-footnote">This summary is collected history, not a diagnosis. Confirm details with the patient.</p>
     </main>
   );

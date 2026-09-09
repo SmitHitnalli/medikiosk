@@ -10,7 +10,7 @@ const MIN_LISTEN_MS = 1200;
 const SPEECH_RMS_THRESHOLD = 0.011;
 
 export function normaliseVoiceText(value = "") {
-  return value.toLowerCase().replace(/[.,!?;:]/g, " ").replace(/\s+/g, " ").trim();
+  return value.toLowerCase().replace(/[.,!?;:।]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 export function voiceYesNo(value) {
@@ -253,6 +253,8 @@ export function useVoiceFlow(language = "en") {
     const listenLanguage = options.listenLanguage || language;
     const retryText = options.retryText || (listenLanguage === "hi"
       ? "मैं समझ नहीं पाया। कृपया फिर से बोलें।"
+      : listenLanguage === "auto"
+        ? "I did not understand. Please speak again. मुझे समझ नहीं आया। कृपया फिर से बोलें।"
       : "I did not understand that. Please speak again.");
     const retries = options.retries ?? 1;
     await speak(text, spokenLanguage);

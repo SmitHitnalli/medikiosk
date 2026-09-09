@@ -52,8 +52,8 @@ export function resetAccessibilityPreferences() {
   window.dispatchEvent(new Event(RESET_EVENT));
 }
 
-// Kiosk-wide accessibility controls. Text size and high contrast apply via
-// data attributes on <html> (see index.css) rather than component state, so
+// Kiosk-wide accessibility controls. Text size and theme apply via data
+// attributes on <html> (see index.css) rather than component state, so
 // they take effect on every screen no matter which one is currently mounted
 // - this component only needs to be rendered once, anywhere. Preference is
 // per-device (localStorage), not per-patient-session: a shared kiosk's

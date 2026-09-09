@@ -418,7 +418,6 @@ function App() {
     speechControllerRef.current = controller;
     controllersRef.current.add(controller);
     setIsSpeaking(true);
-    let played = false;
     try {
       const response = await apiFetch("/speak", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -427,12 +426,10 @@ function App() {
       if (!response.ok) throw new Error("Speech service unavailable");
       if (requestGenerationRef.current !== generation || pageRef.current !== "chat" || speechOperation !== speechOperationRef.current) return;
       await playAudioBlob(await response.blob());
-      played = true;
     } catch (speechError) {
       if (speechError.name !== "AbortError" && speechError.message !== "Audio playback stopped." && speechOperation === speechOperationRef.current) {
         try {
           await playBrowserSpeech(text, language || "en");
-          played = true;
         } catch {
           setError(language === "hi" ? "उत्तर स्क्रीन पर है, लेकिन ऑडियो नहीं चल सका।" : "The reply is shown on screen, but its audio could not be played.");
         }
@@ -443,7 +440,7 @@ function App() {
       if (requestGenerationRef.current === generation && speechOperation === speechOperationRef.current) {
         setIsSpeaking(false);
         window.setTimeout(() => {
-          if (played && requestGenerationRef.current === generation && pageRef.current === "chat" && interactionModeRef.current === "speak") void startRecording();
+          if (requestGenerationRef.current === generation && pageRef.current === "chat" && interactionModeRef.current === "speak") void startRecording();
         }, 450);
       }
     }
@@ -615,9 +612,11 @@ function App() {
   function stopRecording() {
     const recorder = mediaRecorderRef.current;
     if (recorder && recorder.state !== "inactive") recorder.stop();
-    mediaRecorderRef.current = null;
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    mediaStreamRef.current = null;
+    else {
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+      mediaRecorderRef.current = null;
+    }
     stopSilenceMonitor();
     setIsRecording(false);
     isRecordingRef.current = false;
@@ -659,6 +658,10 @@ function App() {
       recorder.onstop = () => {
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         audioChunksRef.current = [];
+        stream.getTracks().forEach((track) => track.stop());
+        if (mediaStreamRef.current === stream) mediaStreamRef.current = null;
+        if (mediaRecorderRef.current === recorder) mediaRecorderRef.current = null;
+        stopSilenceMonitor();
         if (blob.size && generation === requestGenerationRef.current) void transcribeRecording(blob);
       };
       recorder.start();
